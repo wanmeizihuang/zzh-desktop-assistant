@@ -1,9 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod display;
 mod single_instance;
+mod startup;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     env,
     error::Error,
     io,
@@ -16,8 +18,7 @@ use std::{
 
 use app_core::{
     ApplicationPhase, DragDecision, DragGesture, PhysicalPosition as CorePhysicalPosition,
-    PhysicalSize as CorePhysicalSize, PointerPosition, ScreenBounds, WindowState,
-    clamp_window_position,
+    PhysicalSize as CorePhysicalSize, PointerPosition, WindowState, clamp_window_to_nearest_screen,
     config::{AppConfig, ConfigLoadStatus, ConfigStore},
 };
 use slint::ComponentHandle;
@@ -48,12 +49,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
     let tray = AssistantTray::new()?;
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
+    let saved_window_position = config.borrow().window_position;
+    let startup_enabled = Rc::new(Cell::new(startup::is_enabled().unwrap_or_else(|error| {
+        eprintln!("failed to read startup state: {error}");
+        false
+    })));
     let monitor_worker = MonitorWorker::start(ui.as_weak())?;
 
     state.borrow_mut().start();
     ui.set_always_on_top_enabled(state.borrow().always_on_top());
     ui.set_position_locked(state.borrow().position_locked());
+    ui.set_startup_enabled(startup_enabled.get());
     sync_tray_state(&tray, &state.borrow());
+    tray.set_startup_enabled(startup_enabled.get());
 
     register_window_events(
         &ui,
@@ -69,6 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Rc::clone(&state),
         Rc::clone(&gesture),
         Rc::clone(&config),
+        Rc::clone(&startup_enabled),
         config_worker.handle(),
     );
     register_tray_callbacks(
@@ -77,13 +86,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         Rc::clone(&state),
         Rc::clone(&gesture),
         Rc::clone(&config),
+        Rc::clone(&startup_enabled),
         config_worker.handle(),
     );
-
-    if let Some(position) = config.borrow().window_position {
-        ui.window()
-            .set_position(slint::PhysicalPosition::new(position.x, position.y));
-    }
 
     let ui_weak = ui.as_weak();
     let gesture_for_click = Rc::clone(&gesture);
@@ -141,6 +146,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     ui.show()?;
+    restore_saved_window_position_later(
+        &ui,
+        saved_window_position,
+        Rc::clone(&config),
+        config_worker.handle(),
+    );
     tray.show()?;
     let result = slint::run_event_loop();
     drop(single_instance_runtime);
@@ -333,6 +344,10 @@ fn apply_snapshot(ui: &AppWindow, snapshot: MetricSnapshot) {
     let (video_memory_value, video_memory_detail) = format_video_memory(snapshot.video_memory);
     ui.set_video_memory_value(video_memory_value.into());
     ui.set_video_memory_detail(video_memory_detail.into());
+
+    let (temperature_value, temperature_detail) = format_temperature(snapshot.temperature_celsius);
+    ui.set_temperature_value(temperature_value.into());
+    ui.set_temperature_detail(temperature_detail.into());
 }
 
 fn format_cpu(metric: MetricValue<f32>) -> (String, String) {
@@ -389,6 +404,14 @@ fn format_video_memory(metric: MetricValue<system_monitor::VideoMemoryUsage>) ->
         ),
         (SourceStatus::WarmingUp, _) => warming_up_text(),
         _ => unavailable_text(),
+    }
+}
+
+fn format_temperature(metric: MetricValue<f32>) -> (String, String) {
+    match (metric.status, metric.value) {
+        (SourceStatus::Available, Some(value)) => (format!("{value:.0}°C"), "ACPI 热区".into()),
+        (SourceStatus::WarmingUp, _) => ("采样中".into(), "正在读取 ACPI 热区".into()),
+        _ => ("不可用".into(), "未检测到可用温度源".into()),
     }
 }
 
@@ -461,6 +484,7 @@ fn register_behavior_callbacks(
     state: Rc<RefCell<WindowState>>,
     gesture: Rc<RefCell<DragGesture>>,
     config: Rc<RefCell<AppConfig>>,
+    startup_enabled: Rc<Cell<bool>>,
     config_saver: ConfigSaveHandle,
 ) {
     let ui_weak = ui.as_weak();
@@ -491,6 +515,16 @@ fn register_behavior_callbacks(
 
         toggle_position_lock(&ui, &tray, &state, &gesture, &config, &config_saver);
     });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    ui.on_startup_toggle_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+
+        toggle_startup(&ui, &tray, &startup_enabled);
+    });
 }
 
 fn register_tray_callbacks(
@@ -499,6 +533,7 @@ fn register_tray_callbacks(
     state: Rc<RefCell<WindowState>>,
     gesture: Rc<RefCell<DragGesture>>,
     config: Rc<RefCell<AppConfig>>,
+    startup_enabled: Rc<Cell<bool>>,
     config_saver: ConfigSaveHandle,
 ) {
     let ui_weak = ui.as_weak();
@@ -575,6 +610,16 @@ fn register_tray_callbacks(
 
     let ui_weak = ui.as_weak();
     let tray_weak = tray.as_weak();
+    tray.on_startup_toggle_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+
+        toggle_startup(&ui, &tray, &startup_enabled);
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
     let state_for_settings = Rc::clone(&state);
     tray.on_settings_requested(move || {
         let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
@@ -627,69 +672,124 @@ fn register_window_events(
                 return EventResult::Propagate;
             }
 
-            let winit::event::WindowEvent::Moved(position) = event else {
-                return EventResult::Propagate;
+            let event_position = match event {
+                winit::event::WindowEvent::Moved(position) => Some(CorePhysicalPosition {
+                    x: position.x,
+                    y: position.y,
+                }),
+                winit::event::WindowEvent::Resized(_)
+                | winit::event::WindowEvent::ScaleFactorChanged { .. } => None,
+                _ => return EventResult::Propagate,
             };
 
             slint_window.with_winit_window(|window| {
-                let Some(monitor) = window
-                    .current_monitor()
-                    .or_else(|| window.primary_monitor())
-                else {
+                let requested_position = event_position.or_else(|| {
+                    window
+                        .outer_position()
+                        .ok()
+                        .map(|position| CorePhysicalPosition {
+                            x: position.x,
+                            y: position.y,
+                        })
+                });
+                let Some(requested_position) = requested_position else {
                     return;
                 };
-
-                let monitor_position = monitor.position();
-                let monitor_size = monitor.size();
-                let window_size = window.outer_size();
-                let clamped = clamp_window_position(
-                    CorePhysicalPosition {
-                        x: position.x,
-                        y: position.y,
-                    },
-                    CorePhysicalSize {
-                        width: window_size.width,
-                        height: window_size.height,
-                    },
-                    ScreenBounds {
-                        position: CorePhysicalPosition {
-                            x: monitor_position.x,
-                            y: monitor_position.y,
-                        },
-                        size: CorePhysicalSize {
-                            width: monitor_size.width,
-                            height: monitor_size.height,
-                        },
-                    },
-                    32,
+                recover_and_store_window_position(
+                    window,
+                    requested_position,
+                    &config,
+                    &config_saver,
+                    false,
                 );
-
-                if clamped.x != position.x || clamped.y != position.y {
-                    window.set_outer_position(winit::dpi::PhysicalPosition::new(
-                        clamped.x, clamped.y,
-                    ));
-                }
-
-                let position = CorePhysicalPosition {
-                    x: clamped.x,
-                    y: clamped.y,
-                };
-                let snapshot = {
-                    let mut config = config.borrow_mut();
-                    if config.window_position == Some(position) {
-                        None
-                    } else {
-                        config.window_position = Some(position);
-                        Some(config.clone())
-                    }
-                };
-                if let Some(snapshot) = snapshot {
-                    config_saver.request(snapshot);
-                }
             });
 
             EventResult::Propagate
         });
+}
+
+fn restore_saved_window_position_later(
+    ui: &AppWindow,
+    saved_position: Option<CorePhysicalPosition>,
+    config: Rc<RefCell<AppConfig>>,
+    config_saver: ConfigSaveHandle,
+) {
+    let Some(saved_position) = saved_position else {
+        return;
+    };
+    for delay_ms in [150, 400] {
+        let ui_weak = ui.as_weak();
+        let config = Rc::clone(&config);
+        let config_saver = config_saver.clone();
+        slint::Timer::single_shot(Duration::from_millis(delay_ms), move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            ui.window().with_winit_window(|window| {
+                recover_and_store_window_position(
+                    window,
+                    saved_position,
+                    &config,
+                    &config_saver,
+                    true,
+                );
+            });
+        });
+    }
+}
+
+fn recover_and_store_window_position(
+    window: &winit::window::Window,
+    requested_position: CorePhysicalPosition,
+    config: &RefCell<AppConfig>,
+    config_saver: &ConfigSaveHandle,
+    force_position: bool,
+) -> CorePhysicalPosition {
+    let window_size = window.outer_size();
+    let position = match display::work_areas() {
+        Ok(work_areas) => clamp_window_to_nearest_screen(
+            requested_position,
+            CorePhysicalSize {
+                width: window_size.width,
+                height: window_size.height,
+            },
+            &work_areas,
+            32,
+        )
+        .unwrap_or(requested_position),
+        Err(error) => {
+            eprintln!("failed to enumerate monitor work areas: {error}");
+            requested_position
+        }
+    };
+
+    if force_position
+        || position != requested_position
+        || window
+            .outer_position()
+            .ok()
+            .is_none_or(|current| current.x != position.x || current.y != position.y)
+    {
+        match display::set_window_position(window, position) {
+            Ok(()) => {}
+            Err(error) => eprintln!("failed to set native window position: {error}"),
+        }
+    }
+
+    let snapshot = {
+        let mut config = config.borrow_mut();
+        if config.window_position == Some(position) {
+            None
+        } else {
+            config.window_position = Some(position);
+            Some(config.clone())
+        }
+    };
+    if let Some(snapshot) = snapshot {
+        config_saver.request(snapshot);
+    }
+
+    position
 }
 
 fn toggle_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
@@ -794,6 +894,18 @@ fn toggle_position_lock(
     config_saver.request(snapshot);
 }
 
+fn toggle_startup(ui: &AppWindow, tray: &AssistantTray, enabled: &Cell<bool>) {
+    let requested = !enabled.get();
+    if let Err(error) = startup::set_enabled(requested) {
+        eprintln!("failed to update startup state: {error}");
+        return;
+    }
+
+    enabled.set(requested);
+    ui.set_startup_enabled(requested);
+    tray.set_startup_enabled(requested);
+}
+
 fn sync_tray_state(tray: &AssistantTray, state: &WindowState) {
     tray.set_window_visible(matches!(
         state.phase(),
@@ -817,7 +929,10 @@ mod tests {
     };
     use system_monitor::{MemoryUsage, MetricValue, SourceStatus, VideoMemoryUsage};
 
-    use super::{ConfigWorker, format_gpu, format_memory, format_rate, format_video_memory};
+    use super::{
+        ConfigWorker, format_gpu, format_memory, format_rate, format_temperature,
+        format_video_memory,
+    };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -900,5 +1015,27 @@ mod tests {
 
         assert_eq!(value, "25%");
         assert_eq!(detail, "2.0 / 8.0 GB");
+    }
+
+    #[test]
+    fn temperature_text_identifies_the_acpi_source() {
+        let (value, detail) = format_temperature(MetricValue {
+            value: Some(42.4),
+            status: SourceStatus::Available,
+        });
+
+        assert_eq!(value, "42°C");
+        assert_eq!(detail, "ACPI 热区");
+    }
+
+    #[test]
+    fn unavailable_temperature_is_explicit() {
+        let (value, detail) = format_temperature(MetricValue::<f32> {
+            value: None,
+            status: SourceStatus::Unavailable,
+        });
+
+        assert_eq!(value, "不可用");
+        assert_eq!(detail, "未检测到可用温度源");
     }
 }

@@ -149,6 +149,54 @@ pub fn clamp_window_position(
     }
 }
 
+pub fn clamp_window_to_nearest_screen(
+    position: PhysicalPosition,
+    window_size: PhysicalSize,
+    screens: &[ScreenBounds],
+    minimum_visible: u32,
+) -> Option<PhysicalPosition> {
+    let center = PhysicalPosition {
+        x: position.x.saturating_add(u32_to_i32(window_size.width) / 2),
+        y: position
+            .y
+            .saturating_add(u32_to_i32(window_size.height) / 2),
+    };
+    let nearest = screens
+        .iter()
+        .min_by_key(|screen| squared_distance_to_screen(center, **screen))?;
+
+    Some(clamp_window_position(
+        position,
+        window_size,
+        *nearest,
+        minimum_visible,
+    ))
+}
+
+fn squared_distance_to_screen(point: PhysicalPosition, screen: ScreenBounds) -> i128 {
+    let right = screen
+        .position
+        .x
+        .saturating_add(u32_to_i32(screen.size.width));
+    let bottom = screen
+        .position
+        .y
+        .saturating_add(u32_to_i32(screen.size.height));
+    let dx = axis_distance(point.x, screen.position.x, right) as i128;
+    let dy = axis_distance(point.y, screen.position.y, bottom) as i128;
+    dx * dx + dy * dy
+}
+
+fn axis_distance(value: i32, minimum: i32, maximum: i32) -> i64 {
+    if value < minimum {
+        i64::from(minimum) - i64::from(value)
+    } else if value > maximum {
+        i64::from(value) - i64::from(maximum)
+    } else {
+        0
+    }
+}
+
 fn u32_to_i32(value: u32) -> i32 {
     value.min(i32::MAX as u32) as i32
 }
@@ -326,7 +374,7 @@ mod tests {
     use super::{
         ApplicationPhase, DragDecision, DragGesture, PhysicalPosition, PhysicalSize,
         PointerPosition, ScreenBounds, WindowLayout, WindowMode, WindowState,
-        clamp_window_position,
+        clamp_window_position, clamp_window_to_nearest_screen,
     };
 
     #[test]
@@ -549,5 +597,78 @@ mod tests {
         );
 
         assert_eq!(result, PhysicalPosition { x: -9, y: -9 });
+    }
+
+    #[test]
+    fn window_position_uses_the_nearest_screen() {
+        let screens = [
+            ScreenBounds {
+                position: PhysicalPosition { x: 0, y: 0 },
+                size: PhysicalSize {
+                    width: 1920,
+                    height: 1040,
+                },
+            },
+            ScreenBounds {
+                position: PhysicalPosition { x: 1920, y: 100 },
+                size: PhysicalSize {
+                    width: 2560,
+                    height: 1400,
+                },
+            },
+        ];
+
+        assert_eq!(
+            clamp_window_to_nearest_screen(
+                PhysicalPosition { x: 4700, y: 200 },
+                PhysicalSize {
+                    width: 400,
+                    height: 600,
+                },
+                &screens,
+                32,
+            ),
+            Some(PhysicalPosition { x: 4448, y: 200 })
+        );
+    }
+
+    #[test]
+    fn removed_monitor_position_recovers_to_the_remaining_work_area() {
+        let remaining = [ScreenBounds {
+            position: PhysicalPosition { x: 0, y: 0 },
+            size: PhysicalSize {
+                width: 1920,
+                height: 1040,
+            },
+        }];
+
+        assert_eq!(
+            clamp_window_to_nearest_screen(
+                PhysicalPosition { x: -1800, y: 120 },
+                PhysicalSize {
+                    width: 200,
+                    height: 200,
+                },
+                &remaining,
+                32,
+            ),
+            Some(PhysicalPosition { x: -168, y: 120 })
+        );
+    }
+
+    #[test]
+    fn no_available_screen_leaves_recovery_undefined() {
+        assert_eq!(
+            clamp_window_to_nearest_screen(
+                PhysicalPosition { x: 10, y: 20 },
+                PhysicalSize {
+                    width: 200,
+                    height: 200,
+                },
+                &[],
+                32,
+            ),
+            None
+        );
     }
 }

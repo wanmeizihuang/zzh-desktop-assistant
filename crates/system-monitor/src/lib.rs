@@ -81,6 +81,7 @@ pub struct MetricSnapshot {
     pub network: MetricValue<NetworkThroughput>,
     pub gpu_total_percent: MetricValue<f32>,
     pub video_memory: MetricValue<VideoMemoryUsage>,
+    pub temperature_celsius: MetricValue<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +116,7 @@ pub struct SystemSampler {
     previous_cpu: Option<CpuTimes>,
     previous_network: Option<(NetworkCounters, Instant)>,
     gpu: platform::GpuSampler,
+    temperature: platform::TemperatureSampler,
 }
 
 impl SystemSampler {
@@ -126,6 +128,7 @@ impl SystemSampler {
                 .ok()
                 .map(|counters| (counters, now)),
             gpu: platform::GpuSampler::new(),
+            temperature: platform::TemperatureSampler::new(),
         }
     }
 
@@ -136,6 +139,7 @@ impl SystemSampler {
             network: self.sample_network(),
             gpu_total_percent: self.sample_gpu(),
             video_memory: self.sample_video_memory(),
+            temperature_celsius: self.sample_temperature(),
         }
     }
 
@@ -182,6 +186,13 @@ impl SystemSampler {
     fn sample_video_memory(&mut self) -> MetricValue<VideoMemoryUsage> {
         self.gpu
             .read_video_memory()
+            .map(MetricValue::available)
+            .unwrap_or_else(|_| MetricValue::unavailable())
+    }
+
+    fn sample_temperature(&mut self) -> MetricValue<f32> {
+        self.temperature
+            .read_celsius()
             .map(MetricValue::available)
             .unwrap_or_else(|_| MetricValue::unavailable())
     }
@@ -273,6 +284,21 @@ fn select_video_adapter(candidates: &[VideoAdapterCandidate]) -> Option<usize> {
         .map(|candidate| candidate.index)
 }
 
+fn select_hottest_temperature_celsius(samples: &[f64], units_per_kelvin: f64) -> Option<f32> {
+    if !units_per_kelvin.is_finite() || units_per_kelvin <= 0.0 {
+        return None;
+    }
+
+    samples
+        .iter()
+        .filter_map(|sample| {
+            let celsius = *sample / units_per_kelvin - 273.15;
+            (celsius.is_finite() && (-50.0..=200.0).contains(&celsius)).then_some(celsius)
+        })
+        .max_by(f64::total_cmp)
+        .map(|value| value as f32)
+}
+
 fn adapter_luid_key(instance: &str) -> Option<String> {
     let normalized = instance.to_ascii_lowercase();
     if !normalized.starts_with("luid_") {
@@ -315,12 +341,36 @@ mod platform {
 
     use super::{
         CpuTimes, GpuEngineSample, MemoryUsage, NetworkCounters, VideoAdapterCandidate,
-        VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent, select_video_adapter,
+        VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent,
+        select_hottest_temperature_celsius, select_video_adapter,
     };
 
     pub struct GpuSampler {
         usage: Option<PdhGpuUsage>,
         video_memory: Option<PdhVideoMemory>,
+    }
+
+    pub struct TemperatureSampler {
+        reader: Option<PdhTemperature>,
+    }
+
+    impl TemperatureSampler {
+        pub fn new() -> Self {
+            Self {
+                reader: PdhTemperature::new(
+                    w!(r"\Thermal Zone Information(*)\High Precision Temperature"),
+                    10.0,
+                )
+                .or_else(|_| {
+                    PdhTemperature::new(w!(r"\Thermal Zone Information(*)\Temperature"), 1.0)
+                })
+                .ok(),
+            }
+        }
+
+        pub fn read_celsius(&mut self) -> Result<f32, ()> {
+            self.reader.as_mut().ok_or(())?.sample()
+        }
     }
 
     impl GpuSampler {
@@ -393,6 +443,52 @@ mod platform {
 
     fn filetime_to_u64(value: FILETIME) -> u64 {
         (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
+    }
+
+    struct PdhTemperature {
+        query: PDH_HQUERY,
+        counter: PDH_HCOUNTER,
+        units_per_kelvin: f64,
+    }
+
+    impl PdhTemperature {
+        fn new(path: PCWSTR, units_per_kelvin: f64) -> Result<Self, ()> {
+            let mut query = PDH_HQUERY::default();
+            if unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut query) } != 0 {
+                return Err(());
+            }
+
+            let mut reader = Self {
+                query,
+                counter: PDH_HCOUNTER::default(),
+                units_per_kelvin,
+            };
+            if unsafe { PdhAddEnglishCounterW(reader.query, path, 0, &mut reader.counter) } != 0
+                || unsafe { PdhCollectQueryData(reader.query) } != 0
+            {
+                return Err(());
+            }
+            Ok(reader)
+        }
+
+        fn sample(&mut self) -> Result<f32, ()> {
+            if unsafe { PdhCollectQueryData(self.query) } != 0 {
+                return Err(());
+            }
+            let samples = read_formatted_samples(self.counter, PDH_FMT_DOUBLE)?
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>();
+            select_hottest_temperature_celsius(&samples, self.units_per_kelvin).ok_or(())
+        }
+    }
+
+    impl Drop for PdhTemperature {
+        fn drop(&mut self) {
+            if !self.query.is_invalid() {
+                unsafe { PdhCloseQuery(self.query) };
+            }
+        }
     }
 
     struct PdhGpuUsage {
@@ -716,6 +812,18 @@ mod platform {
 
     pub struct GpuSampler;
 
+    pub struct TemperatureSampler;
+
+    impl TemperatureSampler {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn read_celsius(&mut self) -> Result<f32, ()> {
+            Err(())
+        }
+    }
+
     impl GpuSampler {
         pub fn new() -> Self {
             Self
@@ -750,7 +858,7 @@ mod tests {
     use super::{
         CpuTimes, GpuEngineSample, MemoryUsage, NetworkCounters, VideoAdapterCandidate,
         VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent, calculate_cpu_percent,
-        calculate_network_throughput, select_video_adapter,
+        calculate_network_throughput, select_hottest_temperature_celsius, select_video_adapter,
     };
 
     #[test]
@@ -958,5 +1066,26 @@ mod tests {
             Some("luid_0x00000000_0x0000f98e".into())
         );
         assert_eq!(adapter_luid_key("not-a-gpu-adapter"), None);
+    }
+
+    #[test]
+    fn high_precision_acpi_temperature_converts_from_tenths_kelvin() {
+        let temperature =
+            select_hottest_temperature_celsius(&[3010.0], 10.0).expect("valid ACPI temperature");
+
+        assert!((temperature - 27.85).abs() < 0.01);
+    }
+
+    #[test]
+    fn temperature_uses_the_hottest_valid_zone_and_rejects_invalid_samples() {
+        let temperature =
+            select_hottest_temperature_celsius(&[f64::NAN, 100.0, 3010.0, 3155.0, 6000.0], 10.0)
+                .expect("at least one valid thermal zone");
+
+        assert!((temperature - 42.35).abs() < 0.01);
+        assert_eq!(
+            select_hottest_temperature_celsius(&[100.0, 6000.0], 10.0),
+            None
+        );
     }
 }

@@ -111,11 +111,13 @@ export component AssistantTray inherits SystemTrayIcon {
     in property <bool> expanded: false;
     in property <bool> always-on-top-enabled: true;
     in property <bool> position-locked: false;
+    in property <bool> startup-enabled: false;
     callback show-hide-requested;
     callback tray-clicked;
     callback toggle-requested;
     callback always-on-top-toggle-requested;
     callback position-lock-toggle-requested;
+    callback startup-toggle-requested;
     callback settings-requested;
     callback exit-requested;
 
@@ -142,6 +144,10 @@ export component AssistantTray inherits SystemTrayIcon {
             title: root.position-locked ? "✓ 锁定位置" : "锁定位置";
             activated => { root.position-lock-toggle-requested(); }
         }
+        MenuItem {
+            title: root.startup-enabled ? "✓ 开机启动" : "开机启动";
+            activated => { root.startup-toggle-requested(); }
+        }
         MenuSeparator { }
         MenuItem {
             title: "设置";
@@ -160,6 +166,7 @@ export component AppWindow inherits Window {
     in-out property <int> active-tab: 0;
     in-out property <bool> always-on-top-enabled: true;
     in-out property <bool> position-locked: false;
+    in-out property <bool> startup-enabled: false;
     in property <string> cpu-value: "采样中";
     in property <string> cpu-detail: "正在建立差分基线";
     in property <string> memory-value: "采样中";
@@ -170,12 +177,15 @@ export component AppWindow inherits Window {
     in property <string> gpu-detail: "正在建立差分基线";
     in property <string> video-memory-value: "采样中";
     in property <string> video-memory-detail: "正在读取 GPU 内存";
+    in property <string> temperature-value: "采样中";
+    in property <string> temperature-detail: "正在读取 ACPI 热区";
     callback toggle-requested;
     callback mascot-clicked;
     callback drag-pointer-pressed(length, length);
     callback drag-pointer-moved(length, length);
     callback always-on-top-toggle-requested;
     callback position-lock-toggle-requested;
+    callback startup-toggle-requested;
     callback wake-requested;
 
     width: root.expanded ? 412px : 200px;
@@ -365,7 +375,7 @@ export component AppWindow inherits Window {
                 y: 23px;
                 width: parent.width;
                 height: 18px;
-                text: "CPU / 内存 / GPU / 显存 / 网络每 2 秒刷新";
+                text: "CPU / 内存 / GPU / 显存 / 温度 / 网络每 2 秒刷新";
                 color: #8b94a6;
                 font-size: 11px;
             }
@@ -374,7 +384,7 @@ export component AppWindow inherits Window {
             MetricCard { x: 188px; y: 53px; width: 176px; height: 100px; label: "内存"; value: root.memory-value; detail: root.memory-detail; accent: #28c9d8; }
             MetricCard { x: 0; y: 165px; width: 176px; height: 100px; label: "GPU"; value: root.gpu-value; detail: root.gpu-detail; accent: #f2a0c2; }
             MetricCard { x: 188px; y: 165px; width: 176px; height: 100px; label: "显存"; value: root.video-memory-value; detail: root.video-memory-detail; accent: #2f6bff; }
-            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: "待接入"; detail: "能力允许降级"; accent: #e0a32e; }
+            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: root.temperature-value; detail: root.temperature-detail; accent: #e0a32e; }
             MetricCard { x: 188px; y: 277px; width: 176px; height: 100px; label: "网络"; value: root.network-value; detail: root.network-detail; accent: #28a96b; }
 
             Rectangle {
@@ -386,7 +396,7 @@ export component AppWindow inherits Window {
                 border-radius: 8px;
 
                 Text { x: 12px; y: 10px; width: parent.width - 24px; height: 20px; text: "核心监控已连接"; color: #1f53d6; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "温度能力将在后续阶段接入"; color: #5a6577; font-size: 11px; }
+                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "温度显示当前最高 ACPI 热区"; color: #5a6577; font-size: 11px; }
             }
         }
 
@@ -501,15 +511,27 @@ export component AppWindow inherits Window {
                 }
             }
 
-            Text { x: 0; y: 204px; width: parent.width; height: 24px; text: "采样频率"; color: #1c2433; font-size: 14px; font-weight: 700; }
             Rectangle {
-                x: 0; y: 240px; width: parent.width; height: 48px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                x: 0; y: 188px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "开机启动"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "登录 Windows 后自动启动晓曦"; color: #8b94a6; font-size: 11px; }
+                ToggleSwitch {
+                    x: parent.width - 50px;
+                    y: 20px;
+                    checked: root.startup-enabled;
+                    toggled => { root.startup-toggle-requested(); }
+                }
+            }
+
+            Text { x: 0; y: 280px; width: parent.width; height: 24px; text: "采样频率"; color: #1c2433; font-size: 14px; font-weight: 700; }
+            Rectangle {
+                x: 0; y: 316px; width: parent.width; height: 48px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
                 Text { x: 12px; y: 14px; width: 220px; height: 20px; text: "展开时刷新间隔"; color: #5a6577; font-size: 12px; }
                 Text { x: parent.width - 80px; y: 14px; width: 56px; height: 20px; text: "2 秒"; color: #2f6bff; font-size: 12px; font-weight: 700; horizontal-alignment: right; }
             }
 
             Rectangle {
-                x: 0; y: 316px; width: parent.width; height: 76px; background: #eaf1ff; border-radius: 8px;
+                x: 0; y: 392px; width: parent.width; height: 76px; background: #eaf1ff; border-radius: 8px;
                 Text { x: 12px; y: 11px; width: parent.width - 24px; height: 20px; text: "技术验证版本"; color: #1f53d6; font-size: 13px; font-weight: 700; }
                 Text { x: 12px; y: 35px; width: parent.width - 24px; height: 30px; text: "桌面行为会自动保存并在下次启动恢复。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
             }

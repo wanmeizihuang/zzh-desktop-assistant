@@ -71,7 +71,7 @@ Monitoring pause remains in P6 with alert and worker-control behavior; it is not
 
 ### Task 5: Startup and display recovery
 
-**Status:** Pending
+**Status:** Implemented; interactive multi-display/DPI verification pending (2026-07-30)
 
 **Files:**
 - Create: `apps/desktop/src/startup.rs`
@@ -83,9 +83,11 @@ Monitoring pause remains in P6 with alert and worker-control behavior; it is not
 3. Choose the nearest available work area when the saved monitor no longer exists.
 4. Verify on Windows 11 at 100%, 150% and a simulated removed secondary display.
 
+Implementation and automated verification are complete for the current-user Run value, Win32 work-area enumeration, nearest-screen selection, removed-monitor geometry and ACPI thermal-zone monitoring. The isolated HKCU write/read/delete test passes without administrator rights. The automated desktop session does not expose the Slint tool window as an interactive top-level window, so physical window placement across live monitor changes still requires a direct desktop check.
+
 ### Task 6: P2 quality gate
 
-**Status:** Pending
+**Status:** In progress (2026-07-30)
 
 **Files:**
 - Modify: `README.md`

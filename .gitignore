@@ -1,6 +1,6 @@
 /target/
+/backups/
 *.pdb
 *.ilk
 .idea/
 .vscode/
-
