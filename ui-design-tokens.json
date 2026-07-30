@@ -1,0 +1,152 @@
+{
+  "meta": {
+    "product": "桌面智能助手",
+    "sourcePlan": "docs/plans/2026-07-30-desktop-assistant-design.md",
+    "visualReference": "桌面助手UI设计原型.html",
+    "visualStyle": "light-pseudo-glass-utility",
+    "accentConstraint": "no purple in functional UI; blue only; mascot pink/cyan are identity accents",
+    "platform": "Windows 10/11 x64"
+  },
+  "colors": {
+    "accent": "#2f6bff",
+    "accentSoft": "#eaf1ff",
+    "accentPress": "#1f53d6",
+    "xiaoxiCyan": "#28c9d8",
+    "xiaoxiPink": "#f2a0c2",
+    "ok": "#28a96b",
+    "warn": "#e0a32e",
+    "danger": "#e5484d",
+    "ink": "#1c2433",
+    "ink2": "#5a6577",
+    "ink3": "#8b94a6",
+    "line": "rgba(20,30,60,0.08)",
+    "panel": "rgba(248,250,253,0.96)",
+    "surface": "rgba(255,255,255,0.86)"
+  },
+  "windowBackground": {
+    "collapsed": "transparent",
+    "expanded": "panel",
+    "liveBackdropBlur": false
+  },
+  "radius": {
+    "panel": 14,
+    "card": 8,
+    "pill": 999,
+    "control": 8
+  },
+  "shadow": {
+    "panel": "0 16px 40px -18px rgba(24,42,90,0.24)"
+  },
+  "spacing": [4, 8, 12, 16, 24],
+  "typography": {
+    "fontFamily": "'Segoe UI Variable', 'Microsoft YaHei UI', 'PingFang SC', sans-serif",
+    "tabularMetricNumbers": true,
+    "sizes": {
+      "title": 30,
+      "panelTitle": 14,
+      "metricValue": 21,
+      "body": 13,
+      "captionMin": 11,
+      "captionMax": 12
+    }
+  },
+  "icons": {
+    "family": "Lucide",
+    "emojiInProductionUi": false,
+    "iconButtonSize": 28
+  },
+  "componentTokens": {
+    "panel": {
+      "width": 412,
+      "height": 640,
+      "maxHeightInset": 24,
+      "blur": 0,
+      "expandGap": 8,
+      "stableAcrossTabs": true
+    },
+    "collapsedWindow": {
+      "width": 200,
+      "height": 200,
+      "transparent": true,
+      "showName": false,
+      "showHint": false,
+      "showDecorativeDots": false
+    },
+    "metricGrid": {
+      "columns": 2,
+      "rows": 3,
+      "gap": 12
+    },
+    "chatLayout": {
+      "agentBar": "top",
+      "messageList": "flex-scroll-virtualized",
+      "composer": "bottom"
+    },
+    "settingsLayout": {
+      "scrollInsidePanel": true,
+      "connectorEditor": "modal"
+    },
+    "samplingFrequencies": ["1s", "2s", "5s"],
+    "thresholds": {
+      "cpuPct": 85,
+      "memoryPct": 90,
+      "tempC": 80
+    },
+    "blockedExtensions": [".env", "私钥", "凭据库"],
+    "agentConnectors": [
+      {
+        "name": "Codex",
+        "type": "本地 CLI",
+        "caps": ["流式", "文件", "本地路径"],
+        "status": "已配置"
+      },
+      {
+        "name": "千问",
+        "type": "厂商官方 HTTP",
+        "caps": ["流式", "文件", "图片"],
+        "status": "已配置"
+      },
+      {
+        "name": "豆包",
+        "type": "厂商官方 HTTP",
+        "caps": ["流式", "图片"],
+        "status": "需配置"
+      },
+      {
+        "name": "DeepSeek",
+        "type": "OpenAI 兼容",
+        "caps": ["流式"],
+        "status": "已配置"
+      },
+      {
+        "name": "Hermes",
+        "type": "兼容 API",
+        "caps": ["流式", "文件"],
+        "status": "需配置"
+      },
+      {
+        "name": "WorkBuddy",
+        "type": "本地 CLI",
+        "caps": ["流式", "文件", "本地路径"],
+        "status": "需配置"
+      }
+    ]
+  },
+  "mascot": {
+    "name": "晓曦",
+    "file": "xiaoxi_full.png",
+    "width": 1009,
+    "height": 968,
+    "colorType": 6,
+    "hasAlpha": true,
+    "fit": "contain",
+    "crop": "none",
+    "sanitizeTransparentRgbBeforePackaging": true
+  },
+  "errorCodes": [
+    "AUTH_INVALID",
+    "RATE_LIMITED",
+    "FILE_UNSUPPORTED",
+    "CLI_NOT_FOUND"
+  ]
+}
