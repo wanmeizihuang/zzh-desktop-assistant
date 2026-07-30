@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "apps/desktop",
+    "crates/app-core",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.97"
+version = "0.1.0"
+
+[workspace.dependencies]
+app-core = { path = "crates/app-core" }
+slint = { version = "=1.17.1", default-features = false, features = [
+    "backend-winit",
+    "compat-1-2",
+    "image-default-formats",
+    "renderer-software",
+    "software-renderer-systemfonts",
+    "std",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+panic = "abort"
+strip = "symbols"

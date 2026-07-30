@@ -1,0 +1,15 @@
+[package]
+name = "desktop-assistant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+app-core.workspace = true
+slint.workspace = true
+
+[build-dependencies]
+slint-build = "=1.17.1"
+

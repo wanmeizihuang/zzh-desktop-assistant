@@ -1,0 +1,391 @@
+component MetricCard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> detail;
+    in property <color> accent: #2f6bff;
+
+    background: #ffffffdc;
+    border-color: #141e3c12;
+    border-width: 1px;
+    border-radius: 8px;
+
+    Rectangle {
+        x: 12px;
+        y: 13px;
+        width: 7px;
+        height: 7px;
+        border-radius: 4px;
+        background: root.accent;
+    }
+
+    Text {
+        x: 27px;
+        y: 9px;
+        width: parent.width - 39px;
+        height: 18px;
+        text: root.label;
+        color: #5a6577;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 12px;
+        y: 34px;
+        width: parent.width - 24px;
+        height: 29px;
+        text: root.value;
+        color: #1c2433;
+        font-size: 21px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 12px;
+        y: 69px;
+        width: parent.width - 24px;
+        height: 17px;
+        text: root.detail;
+        color: #8b94a6;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+}
+
+component TabButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    background: root.selected ? #eaf1ff : transparent;
+    border-radius: 8px;
+
+    Text {
+        text: root.label;
+        color: root.selected ? #2f6bff : #5a6577;
+        font-size: 13px;
+        font-weight: root.selected ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    in-out property <bool> expanded: false;
+    in-out property <int> active-tab: 0;
+    callback toggle-requested;
+
+    width: root.expanded ? 412px : 200px;
+    height: root.expanded ? 640px : 200px;
+    background: transparent;
+    no-frame: true;
+    always-on-top: true;
+    title: "晓曦桌面助手";
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 13px;
+
+    if !root.expanded: Rectangle {
+        background: transparent;
+
+        Image {
+            x: 4px;
+            y: 4px;
+            width: 192px;
+            height: 192px;
+            source: @image-url("../../../xiaoxi_full.png");
+            image-fit: contain;
+        }
+
+        TouchArea {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.toggle-requested(); }
+        }
+    }
+
+    if root.expanded: Rectangle {
+        x: 8px;
+        y: 8px;
+        width: 396px;
+        height: 624px;
+        background: #f8fafd;
+        border-color: #141e3c14;
+        border-width: 1px;
+        border-radius: 14px;
+        drop-shadow-color: #182a5a32;
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 6px;
+
+        Image {
+            x: 16px;
+            y: 12px;
+            width: 42px;
+            height: 42px;
+            source: @image-url("../../../xiaoxi_full.png");
+            image-fit: contain;
+        }
+
+        Text {
+            x: 66px;
+            y: 12px;
+            width: 220px;
+            height: 23px;
+            text: "晓曦";
+            color: #1c2433;
+            font-size: 16px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+
+        Text {
+            x: 66px;
+            y: 34px;
+            width: 220px;
+            height: 17px;
+            text: "设备状态正常";
+            color: #28a96b;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        close-button := Rectangle {
+            x: parent.width - 48px;
+            y: 15px;
+            width: 32px;
+            height: 32px;
+            background: close-touch.has-hover ? #eef2f8 : transparent;
+            border-radius: 8px;
+
+            Text {
+                text: "×";
+                color: #5a6577;
+                font-size: 22px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            close-touch := TouchArea {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.toggle-requested(); }
+            }
+        }
+
+        Rectangle {
+            x: 16px;
+            y: 66px;
+            width: parent.width - 32px;
+            height: 42px;
+            background: #ffffffaa;
+            border-color: #141e3c0d;
+            border-width: 1px;
+            border-radius: 8px;
+
+            TabButton {
+                x: 4px;
+                y: 4px;
+                width: (parent.width - 8px) / 3;
+                height: 34px;
+                label: "监控";
+                selected: root.active-tab == 0;
+                clicked => { root.active-tab = 0; }
+            }
+
+            TabButton {
+                x: 4px + (parent.width - 8px) / 3;
+                y: 4px;
+                width: (parent.width - 8px) / 3;
+                height: 34px;
+                label: "对话";
+                selected: root.active-tab == 1;
+                clicked => { root.active-tab = 1; }
+            }
+
+            TabButton {
+                x: 4px + (parent.width - 8px) * 2 / 3;
+                y: 4px;
+                width: (parent.width - 8px) / 3;
+                height: 34px;
+                label: "设置";
+                selected: root.active-tab == 2;
+                clicked => { root.active-tab = 2; }
+            }
+        }
+
+        if root.active-tab == 0: Rectangle {
+            x: 16px;
+            y: 124px;
+            width: parent.width - 32px;
+            height: 484px;
+            background: transparent;
+
+            Text {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 22px;
+                text: "实时概览";
+                color: #1c2433;
+                font-size: 14px;
+                font-weight: 700;
+            }
+
+            Text {
+                x: 0;
+                y: 23px;
+                width: parent.width;
+                height: 18px;
+                text: "每 2 秒刷新 · 当前为原型数据";
+                color: #8b94a6;
+                font-size: 11px;
+            }
+
+            MetricCard { x: 0; y: 53px; width: 176px; height: 100px; label: "CPU"; value: "18%"; detail: "3.9 GHz"; accent: #2f6bff; }
+            MetricCard { x: 188px; y: 53px; width: 176px; height: 100px; label: "内存"; value: "42%"; detail: "6.7 / 16 GB"; accent: #28c9d8; }
+            MetricCard { x: 0; y: 165px; width: 176px; height: 100px; label: "GPU"; value: "12%"; detail: "核心利用率"; accent: #f2a0c2; }
+            MetricCard { x: 188px; y: 165px; width: 176px; height: 100px; label: "显存"; value: "1.8 GB"; detail: "共 8 GB"; accent: #2f6bff; }
+            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: "48°C"; detail: "CPU 封装"; accent: #e0a32e; }
+            MetricCard { x: 188px; y: 277px; width: 176px; height: 100px; label: "网络"; value: "2.4 MB/s"; detail: "↓ 2.4  ↑ 0.3"; accent: #28a96b; }
+
+            Rectangle {
+                x: 0;
+                y: 393px;
+                width: parent.width;
+                height: 67px;
+                background: #eaf1ff;
+                border-radius: 8px;
+
+                Text { x: 12px; y: 10px; width: parent.width - 24px; height: 20px; text: "系统状态稳定"; color: #1f53d6; font-size: 13px; font-weight: 700; }
+                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "所有可用指标均在设定阈值内"; color: #5a6577; font-size: 11px; }
+            }
+        }
+
+        if root.active-tab == 1: Rectangle {
+            x: 16px;
+            y: 124px;
+            width: parent.width - 32px;
+            height: 484px;
+            background: transparent;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 52px;
+                background: #ffffffdc;
+                border-color: #141e3c12;
+                border-width: 1px;
+                border-radius: 8px;
+                Text { x: 12px; y: 8px; width: 240px; height: 20px; text: "Codex"; color: #1c2433; font-size: 13px; font-weight: 700; }
+                Text { x: 12px; y: 29px; width: 240px; height: 16px; text: "本地 CLI · 已连接"; color: #28a96b; font-size: 11px; }
+                Text { x: parent.width - 34px; y: 14px; width: 22px; height: 22px; text: "⌄"; color: #5a6577; font-size: 18px; horizontal-alignment: center; }
+            }
+
+            Text {
+                x: 24px;
+                y: 176px;
+                width: parent.width - 48px;
+                height: 50px;
+                text: "选择智能体后，在这里直接开始对话";
+                color: #8b94a6;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                x: 0;
+                y: 390px;
+                width: parent.width;
+                height: 94px;
+                background: #ffffff;
+                border-color: #2f6bff40;
+                border-width: 1px;
+                border-radius: 8px;
+
+                prompt := TextInput {
+                    x: 12px;
+                    y: 10px;
+                    width: parent.width - 24px;
+                    height: 42px;
+                    color: #1c2433;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                if prompt.text == "": Text {
+                    x: 12px;
+                    y: 10px;
+                    width: parent.width - 24px;
+                    height: 42px;
+                    text: "给晓曦一个任务...";
+                    color: #8b94a6;
+                    font-size: 13px;
+                    vertical-alignment: top;
+                }
+
+                Text { x: 12px; y: 62px; width: 28px; height: 24px; text: "+"; color: #5a6577; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                Rectangle {
+                    x: parent.width - 44px;
+                    y: 58px;
+                    width: 32px;
+                    height: 28px;
+                    background: #2f6bff;
+                    border-radius: 8px;
+                    Text { text: "↑"; color: white; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+
+        if root.active-tab == 2: Rectangle {
+            x: 16px;
+            y: 124px;
+            width: parent.width - 32px;
+            height: 484px;
+            background: transparent;
+
+            Text { x: 0; y: 0; width: parent.width; height: 24px; text: "桌面行为"; color: #1c2433; font-size: 14px; font-weight: 700; }
+
+            Rectangle {
+                x: 0; y: 36px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "始终置顶"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "让晓曦保持在其他窗口上方"; color: #8b94a6; font-size: 11px; }
+                Rectangle { x: parent.width - 50px; y: 20px; width: 38px; height: 24px; background: #2f6bff; border-radius: 12px; Rectangle { x: 18px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; } }
+            }
+
+            Rectangle {
+                x: 0; y: 112px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "锁定位置"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "防止工作时误拖动助手"; color: #8b94a6; font-size: 11px; }
+                Rectangle { x: parent.width - 50px; y: 20px; width: 38px; height: 24px; background: #dce2ec; border-radius: 12px; Rectangle { x: 3px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; } }
+            }
+
+            Text { x: 0; y: 204px; width: parent.width; height: 24px; text: "采样频率"; color: #1c2433; font-size: 14px; font-weight: 700; }
+            Rectangle {
+                x: 0; y: 240px; width: parent.width; height: 48px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 14px; width: 220px; height: 20px; text: "展开时刷新间隔"; color: #5a6577; font-size: 12px; }
+                Text { x: parent.width - 80px; y: 14px; width: 56px; height: 20px; text: "2 秒"; color: #2f6bff; font-size: 12px; font-weight: 700; horizontal-alignment: right; }
+            }
+
+            Rectangle {
+                x: 0; y: 316px; width: parent.width; height: 76px; background: #eaf1ff; border-radius: 8px;
+                Text { x: 12px; y: 11px; width: parent.width - 24px; height: 20px; text: "技术验证版本"; color: #1f53d6; font-size: 13px; font-weight: 700; }
+                Text { x: 12px; y: 35px; width: parent.width - 24px; height: 30px; text: "设置项将在后续里程碑接入本地配置。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
+            }
+        }
+    }
+}
