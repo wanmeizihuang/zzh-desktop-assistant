@@ -1,0 +1,17 @@
+[package]
+name = "agent-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agent-core.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-cli-fixture"
+path = "src/bin/agent-cli-fixture.rs"
+
