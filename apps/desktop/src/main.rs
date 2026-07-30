@@ -124,6 +124,14 @@ fn apply_snapshot(ui: &AppWindow, snapshot: MetricSnapshot) {
     let (network_value, network_detail) = format_network(snapshot.network);
     ui.set_network_value(network_value.into());
     ui.set_network_detail(network_detail.into());
+
+    let (gpu_value, gpu_detail) = format_gpu(snapshot.gpu_total_percent);
+    ui.set_gpu_value(gpu_value.into());
+    ui.set_gpu_detail(gpu_detail.into());
+
+    let (video_memory_value, video_memory_detail) = format_video_memory(snapshot.video_memory);
+    ui.set_video_memory_value(video_memory_value.into());
+    ui.set_video_memory_detail(video_memory_detail.into());
 }
 
 fn format_cpu(metric: MetricValue<f32>) -> (String, String) {
@@ -154,6 +162,29 @@ fn format_network(metric: MetricValue<system_monitor::NetworkThroughput>) -> (St
         (SourceStatus::Available, Some(network)) => (
             format!("↓ {}", format_rate(network.received_bytes_per_second)),
             format!("↑ {}", format_rate(network.transmitted_bytes_per_second)),
+        ),
+        (SourceStatus::WarmingUp, _) => warming_up_text(),
+        _ => unavailable_text(),
+    }
+}
+
+fn format_gpu(metric: MetricValue<f32>) -> (String, String) {
+    match (metric.status, metric.value) {
+        (SourceStatus::Available, Some(value)) => (format!("{value:.0}%"), "最忙引擎".into()),
+        (SourceStatus::WarmingUp, _) => warming_up_text(),
+        _ => unavailable_text(),
+    }
+}
+
+fn format_video_memory(metric: MetricValue<system_monitor::VideoMemoryUsage>) -> (String, String) {
+    match (metric.status, metric.value) {
+        (SourceStatus::Available, Some(memory)) => (
+            format!("{:.0}%", memory.used_percent()),
+            format!(
+                "{:.1} / {:.1} GB",
+                bytes_to_gib(memory.used_bytes),
+                bytes_to_gib(memory.total_bytes)
+            ),
         ),
         (SourceStatus::WarmingUp, _) => warming_up_text(),
         _ => unavailable_text(),
@@ -271,9 +302,9 @@ fn toggle_window(ui: &AppWindow, state: &RefCell<WindowState>) {
 
 #[cfg(test)]
 mod tests {
-    use system_monitor::{MemoryUsage, MetricValue, SourceStatus};
+    use system_monitor::{MemoryUsage, MetricValue, SourceStatus, VideoMemoryUsage};
 
-    use super::{format_memory, format_rate};
+    use super::{format_gpu, format_memory, format_rate, format_video_memory};
 
     #[test]
     fn network_rate_uses_compact_binary_units() {
@@ -305,5 +336,30 @@ mod tests {
 
         assert_eq!(value, "不可用");
         assert_eq!(detail, "Windows 数据源失败");
+    }
+
+    #[test]
+    fn gpu_text_uses_busiest_engine_semantics() {
+        let (value, detail) = format_gpu(MetricValue {
+            value: Some(42.4),
+            status: SourceStatus::Available,
+        });
+
+        assert_eq!(value, "42%");
+        assert_eq!(detail, "最忙引擎");
+    }
+
+    #[test]
+    fn video_memory_text_contains_percent_and_capacity() {
+        let (value, detail) = format_video_memory(MetricValue {
+            value: Some(VideoMemoryUsage {
+                used_bytes: 2 * 1024 * 1024 * 1024,
+                total_bytes: 8 * 1024 * 1024 * 1024,
+            }),
+            status: SourceStatus::Available,
+        });
+
+        assert_eq!(value, "25%");
+        assert_eq!(detail, "2.0 / 8.0 GB");
     }
 }
