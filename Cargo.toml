@@ -20,6 +20,7 @@ slint = { version = "=1.17.1", default-features = false, features = [
     "renderer-software",
     "software-renderer-systemfonts",
     "std",
+    "unstable-winit-030",
 ] }
 
 [profile.release]

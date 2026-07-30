@@ -83,6 +83,9 @@ export component AppWindow inherits Window {
     in-out property <bool> expanded: false;
     in-out property <int> active-tab: 0;
     callback toggle-requested;
+    callback mascot-clicked;
+    callback drag-pointer-pressed(length, length);
+    callback drag-pointer-moved(length, length);
 
     width: root.expanded ? 412px : 200px;
     height: root.expanded ? 640px : 200px;
@@ -105,12 +108,20 @@ export component AppWindow inherits Window {
             image-fit: contain;
         }
 
-        TouchArea {
+        mascot-touch := TouchArea {
             x: 0;
             y: 0;
             width: parent.width;
             height: parent.height;
-            clicked => { root.toggle-requested(); }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.drag-pointer-pressed(mascot-touch.mouse-x, mascot-touch.mouse-y);
+                }
+            }
+            moved => {
+                root.drag-pointer-moved(mascot-touch.mouse-x, mascot-touch.mouse-y);
+            }
+            clicked => { root.mascot-clicked(); }
         }
     }
 
@@ -157,6 +168,21 @@ export component AppWindow inherits Window {
             color: #28a96b;
             font-size: 11px;
             vertical-alignment: center;
+        }
+
+        header-drag-touch := TouchArea {
+            x: 0;
+            y: 0;
+            width: 340px;
+            height: 58px;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.drag-pointer-pressed(header-drag-touch.mouse-x, header-drag-touch.mouse-y);
+                }
+            }
+            moved => {
+                root.drag-pointer-moved(header-drag-touch.mouse-x, header-drag-touch.mouse-y);
+            }
         }
 
         close-button := Rectangle {
