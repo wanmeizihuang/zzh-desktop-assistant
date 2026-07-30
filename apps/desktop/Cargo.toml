@@ -9,7 +9,7 @@ build = "build.rs"
 [dependencies]
 app-core.workspace = true
 slint.workspace = true
+system-monitor.workspace = true
 
 [build-dependencies]
 slint-build = "=1.17.1"
-

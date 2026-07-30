@@ -2,6 +2,7 @@
 members = [
     "apps/desktop",
     "crates/app-core",
+    "crates/system-monitor",
 ]
 resolver = "2"
 
@@ -13,6 +14,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 app-core = { path = "crates/app-core" }
+system-monitor = { path = "crates/system-monitor" }
 slint = { version = "=1.17.1", default-features = false, features = [
     "backend-winit",
     "compat-1-2",
@@ -21,6 +23,13 @@ slint = { version = "=1.17.1", default-features = false, features = [
     "software-renderer-systemfonts",
     "std",
     "unstable-winit-030",
+] }
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
 ] }
 
 [profile.release]

@@ -82,6 +82,12 @@ component TabButton inherits Rectangle {
 export component AppWindow inherits Window {
     in-out property <bool> expanded: false;
     in-out property <int> active-tab: 0;
+    in property <string> cpu-value: "采样中";
+    in property <string> cpu-detail: "正在建立差分基线";
+    in property <string> memory-value: "采样中";
+    in property <string> memory-detail: "正在读取物理内存";
+    in property <string> network-value: "采样中";
+    in property <string> network-detail: "正在建立差分基线";
     callback toggle-requested;
     callback mascot-clicked;
     callback drag-pointer-pressed(length, length);
@@ -274,17 +280,17 @@ export component AppWindow inherits Window {
                 y: 23px;
                 width: parent.width;
                 height: 18px;
-                text: "每 2 秒刷新 · 当前为原型数据";
+                text: "CPU / 内存 / 网络每 2 秒刷新";
                 color: #8b94a6;
                 font-size: 11px;
             }
 
-            MetricCard { x: 0; y: 53px; width: 176px; height: 100px; label: "CPU"; value: "18%"; detail: "3.9 GHz"; accent: #2f6bff; }
-            MetricCard { x: 188px; y: 53px; width: 176px; height: 100px; label: "内存"; value: "42%"; detail: "6.7 / 16 GB"; accent: #28c9d8; }
-            MetricCard { x: 0; y: 165px; width: 176px; height: 100px; label: "GPU"; value: "12%"; detail: "核心利用率"; accent: #f2a0c2; }
-            MetricCard { x: 188px; y: 165px; width: 176px; height: 100px; label: "显存"; value: "1.8 GB"; detail: "共 8 GB"; accent: #2f6bff; }
-            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: "48°C"; detail: "CPU 封装"; accent: #e0a32e; }
-            MetricCard { x: 188px; y: 277px; width: 176px; height: 100px; label: "网络"; value: "2.4 MB/s"; detail: "↓ 2.4  ↑ 0.3"; accent: #28a96b; }
+            MetricCard { x: 0; y: 53px; width: 176px; height: 100px; label: "CPU"; value: root.cpu-value; detail: root.cpu-detail; accent: #2f6bff; }
+            MetricCard { x: 188px; y: 53px; width: 176px; height: 100px; label: "内存"; value: root.memory-value; detail: root.memory-detail; accent: #28c9d8; }
+            MetricCard { x: 0; y: 165px; width: 176px; height: 100px; label: "GPU"; value: "待接入"; detail: "P1 后续验证"; accent: #f2a0c2; }
+            MetricCard { x: 188px; y: 165px; width: 176px; height: 100px; label: "显存"; value: "待接入"; detail: "P1 后续验证"; accent: #2f6bff; }
+            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: "待接入"; detail: "能力允许降级"; accent: #e0a32e; }
+            MetricCard { x: 188px; y: 277px; width: 176px; height: 100px; label: "网络"; value: root.network-value; detail: root.network-detail; accent: #28a96b; }
 
             Rectangle {
                 x: 0;
@@ -294,8 +300,8 @@ export component AppWindow inherits Window {
                 background: #eaf1ff;
                 border-radius: 8px;
 
-                Text { x: 12px; y: 10px; width: parent.width - 24px; height: 20px; text: "系统状态稳定"; color: #1f53d6; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "所有可用指标均在设定阈值内"; color: #5a6577; font-size: 11px; }
+                Text { x: 12px; y: 10px; width: parent.width - 24px; height: 20px; text: "基础监控已连接"; color: #1f53d6; font-size: 13px; font-weight: 700; }
+                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "GPU、显存与温度将在后续步骤接入"; color: #5a6577; font-size: 11px; }
             }
         }
 

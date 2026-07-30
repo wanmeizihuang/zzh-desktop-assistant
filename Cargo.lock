@@ -906,6 +906,7 @@ dependencies = [
  "app-core",
  "slint",
  "slint-build",
+ "system-monitor",
 ]
 
 [[package]]
@@ -4372,6 +4373,13 @@ dependencies = [
  "libc",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "system-monitor"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]
