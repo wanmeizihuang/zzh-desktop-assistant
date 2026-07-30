@@ -53,19 +53,21 @@
 
 ### Task 4: Tray and single instance
 
-**Status:** Pending
+**Status:** Complete (2026-07-30)
 
 **Files:**
 - Modify: `Cargo.toml`
 - Modify: `apps/desktop/Cargo.toml`
-- Create: `apps/desktop/src/tray.rs`
+- Modify: `apps/desktop/ui/app-window.slint`
 - Create: `apps/desktop/src/single_instance.rs`
 - Modify: `apps/desktop/src/main.rs`
 
 1. Add a tray icon derived from the approved Xiaoxi asset and implement the agreed menu.
 2. Route every tray action through the shared lifecycle/settings state.
 3. Add a current-user single-instance guard and wake-up channel.
-4. Verify show/hide, expand/collapse, settings, pause and exit from the tray.
+4. Verify show/hide, expand/collapse, settings, behavior toggles and exit from the tray.
+
+Monitoring pause remains in P6 with alert and worker-control behavior; it is not exposed as a non-functional tray action.
 
 ### Task 5: Startup and display recovery
 

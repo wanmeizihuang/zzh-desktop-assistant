@@ -106,6 +106,55 @@ component ToggleSwitch inherits Rectangle {
     }
 }
 
+export component AssistantTray inherits SystemTrayIcon {
+    in property <bool> window-visible: true;
+    in property <bool> expanded: false;
+    in property <bool> always-on-top-enabled: true;
+    in property <bool> position-locked: false;
+    callback show-hide-requested;
+    callback tray-clicked;
+    callback toggle-requested;
+    callback always-on-top-toggle-requested;
+    callback position-lock-toggle-requested;
+    callback settings-requested;
+    callback exit-requested;
+
+    icon: @image-url("../../../xiaoxi_full.png");
+    tooltip: "晓曦桌面助手";
+    clicked => { root.tray-clicked(); }
+
+    Menu {
+        MenuItem {
+            title: root.window-visible ? "隐藏助手" : "显示助手";
+            activated => { root.show-hide-requested(); }
+        }
+        MenuItem {
+            title: root.expanded ? "收起面板" : "展开面板";
+            enabled: root.window-visible;
+            activated => { root.toggle-requested(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: root.always-on-top-enabled ? "✓ 始终置顶" : "始终置顶";
+            activated => { root.always-on-top-toggle-requested(); }
+        }
+        MenuItem {
+            title: root.position-locked ? "✓ 锁定位置" : "锁定位置";
+            activated => { root.position-lock-toggle-requested(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "设置";
+            activated => { root.settings-requested(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "退出";
+            activated => { root.exit-requested(); }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     in-out property <bool> expanded: false;
     in-out property <int> active-tab: 0;
@@ -127,6 +176,7 @@ export component AppWindow inherits Window {
     callback drag-pointer-moved(length, length);
     callback always-on-top-toggle-requested;
     callback position-lock-toggle-requested;
+    callback wake-requested;
 
     width: root.expanded ? 412px : 200px;
     height: root.expanded ? 640px : 200px;

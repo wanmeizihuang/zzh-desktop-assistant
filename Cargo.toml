@@ -28,6 +28,7 @@ slint = { version = "=1.17.1", default-features = false, features = [
     "renderer-software",
     "software-renderer-systemfonts",
     "std",
+    "system-tray",
     "unstable-winit-030",
 ] }
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -38,6 +39,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Performance",
     "Win32_System_SystemInformation",

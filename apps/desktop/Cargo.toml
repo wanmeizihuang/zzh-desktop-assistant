@@ -10,6 +10,7 @@ build = "build.rs"
 app-core.workspace = true
 slint.workspace = true
 system-monitor.workspace = true
+windows.workspace = true
 
 [build-dependencies]
 slint-build = "=1.17.1"

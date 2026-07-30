@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod single_instance;
+
 use std::{
     cell::RefCell,
     env,
@@ -13,7 +15,7 @@ use std::{
 };
 
 use app_core::{
-    DragDecision, DragGesture, PhysicalPosition as CorePhysicalPosition,
+    ApplicationPhase, DragDecision, DragGesture, PhysicalPosition as CorePhysicalPosition,
     PhysicalSize as CorePhysicalSize, PointerPosition, ScreenBounds, WindowState,
     clamp_window_position,
     config::{AppConfig, ConfigLoadStatus, ConfigStore},
@@ -25,6 +27,11 @@ use system_monitor::{MetricSnapshot, MetricValue, SourceStatus, SystemSampler};
 slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let primary_instance = match single_instance::acquire()? {
+        single_instance::AcquireResult::Primary(instance) => instance,
+        single_instance::AcquireResult::SecondaryNotified => return Ok(()),
+    };
+
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("software".into())
@@ -39,15 +46,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     )));
     let config_worker = ConfigWorker::start(config_store)?;
     let ui = AppWindow::new()?;
+    let tray = AssistantTray::new()?;
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
     let monitor_worker = MonitorWorker::start(ui.as_weak())?;
 
     state.borrow_mut().start();
     ui.set_always_on_top_enabled(state.borrow().always_on_top());
     ui.set_position_locked(state.borrow().position_locked());
+    sync_tray_state(&tray, &state.borrow());
 
     register_window_events(
         &ui,
+        &tray,
         Rc::clone(&state),
         Rc::clone(&config),
         config_worker.handle(),
@@ -55,6 +65,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     register_drag_callbacks(&ui, Rc::clone(&gesture), Rc::clone(&state));
     register_behavior_callbacks(
         &ui,
+        &tray,
+        Rc::clone(&state),
+        Rc::clone(&gesture),
+        Rc::clone(&config),
+        config_worker.handle(),
+    );
+    register_tray_callbacks(
+        &ui,
+        &tray,
         Rc::clone(&state),
         Rc::clone(&gesture),
         Rc::clone(&config),
@@ -69,6 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui_weak = ui.as_weak();
     let gesture_for_click = Rc::clone(&gesture);
     let state_for_click = Rc::clone(&state);
+    let tray_weak = tray.as_weak();
 
     ui.on_mascot_clicked(move || {
         if !gesture_for_click.borrow_mut().take_click() {
@@ -79,20 +99,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             return;
         };
 
-        toggle_window(&ui, &state_for_click);
+        let Some(tray) = tray_weak.upgrade() else {
+            return;
+        };
+        toggle_window(&ui, &tray, &state_for_click);
     });
 
     let ui_weak = ui.as_weak();
 
+    let tray_weak = tray.as_weak();
+    let state_for_toggle = Rc::clone(&state);
     ui.on_toggle_requested(move || {
         let Some(ui) = ui_weak.upgrade() else {
             return;
         };
+        let Some(tray) = tray_weak.upgrade() else {
+            return;
+        };
 
-        toggle_window(&ui, &state);
+        toggle_window(&ui, &tray, &state_for_toggle);
     });
 
-    let result = ui.run();
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_wake = Rc::clone(&state);
+    ui.on_wake_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        restore_window(&ui, &tray, &state_for_wake);
+    });
+
+    let ui_weak = ui.as_weak();
+    let single_instance_runtime = primary_instance.start_wake_listener(move || {
+        if ui_weak
+            .upgrade_in_event_loop(|ui| ui.invoke_wake_requested())
+            .is_err()
+        {
+            eprintln!("failed to deliver a single-instance wake request");
+        }
+    })?;
+
+    ui.show()?;
+    tray.show()?;
+    let result = slint::run_event_loop();
+    drop(single_instance_runtime);
     drop(monitor_worker);
     drop(config_worker);
     result.map_err(Into::into)
@@ -406,57 +457,158 @@ fn register_drag_callbacks(
 
 fn register_behavior_callbacks(
     ui: &AppWindow,
+    tray: &AssistantTray,
     state: Rc<RefCell<WindowState>>,
     gesture: Rc<RefCell<DragGesture>>,
     config: Rc<RefCell<AppConfig>>,
     config_saver: ConfigSaveHandle,
 ) {
     let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
     let state_for_topmost = Rc::clone(&state);
     let config_for_topmost = Rc::clone(&config);
     let saver_for_topmost = config_saver.clone();
     ui.on_always_on_top_toggle_requested(move || {
-        let Some(ui) = ui_weak.upgrade() else {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
             return;
         };
 
-        let enabled = state_for_topmost.borrow_mut().toggle_always_on_top();
-        ui.set_always_on_top_enabled(enabled);
-        let snapshot = {
-            let mut config = config_for_topmost.borrow_mut();
-            config.always_on_top = enabled;
-            config.clone()
-        };
-        saver_for_topmost.request(snapshot);
+        toggle_always_on_top(
+            &ui,
+            &tray,
+            &state_for_topmost,
+            &config_for_topmost,
+            &saver_for_topmost,
+        );
     });
 
     let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
     ui.on_position_lock_toggle_requested(move || {
-        let Some(ui) = ui_weak.upgrade() else {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
             return;
         };
 
-        let locked = state.borrow_mut().toggle_position_locked();
-        if locked {
-            gesture.borrow_mut().cancel();
-        }
-        ui.set_position_locked(locked);
-        let snapshot = {
-            let mut config = config.borrow_mut();
-            config.position_locked = locked;
-            config.clone()
+        toggle_position_lock(&ui, &tray, &state, &gesture, &config, &config_saver);
+    });
+}
+
+fn register_tray_callbacks(
+    ui: &AppWindow,
+    tray: &AssistantTray,
+    state: Rc<RefCell<WindowState>>,
+    gesture: Rc<RefCell<DragGesture>>,
+    config: Rc<RefCell<AppConfig>>,
+    config_saver: ConfigSaveHandle,
+) {
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_click = Rc::clone(&state);
+    tray.on_tray_clicked(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
         };
-        config_saver.request(snapshot);
+        restore_window(&ui, &tray, &state_for_click);
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_visibility = Rc::clone(&state);
+    tray.on_show_hide_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        if state_for_visibility.borrow().phase() == ApplicationPhase::Hidden {
+            restore_window(&ui, &tray, &state_for_visibility);
+        } else {
+            hide_window(&ui, &tray, &state_for_visibility);
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_toggle = Rc::clone(&state);
+    tray.on_toggle_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        toggle_window(&ui, &tray, &state_for_toggle);
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_topmost = Rc::clone(&state);
+    let config_for_topmost = Rc::clone(&config);
+    let saver_for_topmost = config_saver.clone();
+    tray.on_always_on_top_toggle_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        toggle_always_on_top(
+            &ui,
+            &tray,
+            &state_for_topmost,
+            &config_for_topmost,
+            &saver_for_topmost,
+        );
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_lock = Rc::clone(&state);
+    let gesture_for_lock = Rc::clone(&gesture);
+    let config_for_lock = Rc::clone(&config);
+    let saver_for_lock = config_saver.clone();
+    tray.on_position_lock_toggle_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        toggle_position_lock(
+            &ui,
+            &tray,
+            &state_for_lock,
+            &gesture_for_lock,
+            &config_for_lock,
+            &saver_for_lock,
+        );
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    let state_for_settings = Rc::clone(&state);
+    tray.on_settings_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        open_settings(&ui, &tray, &state_for_settings);
+    });
+
+    let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
+    tray.on_exit_requested(move || {
+        let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
+            return;
+        };
+        if !state.borrow_mut().exit() {
+            return;
+        }
+        let _ = ui.hide();
+        let _ = tray.hide();
+        if let Err(error) = slint::quit_event_loop() {
+            eprintln!("failed to quit the event loop: {error}");
+        }
     });
 }
 
 fn register_window_events(
     ui: &AppWindow,
+    tray: &AssistantTray,
     state: Rc<RefCell<WindowState>>,
     config: Rc<RefCell<AppConfig>>,
     config_saver: ConfigSaveHandle,
 ) {
     let ui_weak = ui.as_weak();
+    let tray_weak = tray.as_weak();
     ui.window()
         .on_winit_window_event(move |slint_window, event| {
             if let winit::event::WindowEvent::KeyboardInput { event, .. } = event
@@ -465,11 +617,11 @@ fn register_window_events(
                 && event.logical_key
                     == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
             {
-                let Some(ui) = ui_weak.upgrade() else {
+                let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
                     return EventResult::Propagate;
                 };
 
-                if collapse_window(&ui, &state) {
+                if collapse_window(&ui, &tray, &state) {
                     return EventResult::PreventDefault;
                 }
                 return EventResult::Propagate;
@@ -540,20 +692,116 @@ fn register_window_events(
         });
 }
 
-fn toggle_window(ui: &AppWindow, state: &RefCell<WindowState>) {
+fn toggle_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
     let mut state = state.borrow_mut();
     state.toggle();
     ui.set_expanded(state.mode().is_expanded());
+    sync_tray_state(tray, &state);
 }
 
-fn collapse_window(ui: &AppWindow, state: &RefCell<WindowState>) -> bool {
+fn collapse_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) -> bool {
     let mut state = state.borrow_mut();
     if state.collapse().is_none() {
         return false;
     }
 
     ui.set_expanded(false);
+    sync_tray_state(tray, &state);
     true
+}
+
+fn hide_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
+    let mut state = state.borrow_mut();
+    if !state.hide() {
+        return;
+    }
+
+    let _ = ui.hide();
+    sync_tray_state(tray, &state);
+}
+
+fn restore_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
+    let mut state = state.borrow_mut();
+    if state.phase() == ApplicationPhase::Exiting {
+        return;
+    }
+    if let Some(layout) = state.restore() {
+        ui.set_expanded(layout.width > app_core::WindowMode::COLLAPSED_LAYOUT.width);
+    }
+    sync_tray_state(tray, &state);
+    drop(state);
+
+    if let Err(error) = ui.show() {
+        eprintln!("failed to show the assistant window: {error}");
+        return;
+    }
+    ui.window()
+        .with_winit_window(|window| window.focus_window());
+}
+
+fn open_settings(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
+    restore_window(ui, tray, state);
+
+    let mut state = state.borrow_mut();
+    if state.phase() == ApplicationPhase::Collapsed {
+        state.toggle();
+    }
+    if state.phase() != ApplicationPhase::Expanded {
+        return;
+    }
+    ui.set_expanded(true);
+    ui.set_active_tab(2);
+    sync_tray_state(tray, &state);
+}
+
+fn toggle_always_on_top(
+    ui: &AppWindow,
+    tray: &AssistantTray,
+    state: &RefCell<WindowState>,
+    config: &RefCell<AppConfig>,
+    config_saver: &ConfigSaveHandle,
+) {
+    let enabled = state.borrow_mut().toggle_always_on_top();
+    ui.set_always_on_top_enabled(enabled);
+    tray.set_always_on_top_enabled(enabled);
+    let snapshot = {
+        let mut config = config.borrow_mut();
+        config.always_on_top = enabled;
+        config.clone()
+    };
+    config_saver.request(snapshot);
+}
+
+fn toggle_position_lock(
+    ui: &AppWindow,
+    tray: &AssistantTray,
+    state: &RefCell<WindowState>,
+    gesture: &RefCell<DragGesture>,
+    config: &RefCell<AppConfig>,
+    config_saver: &ConfigSaveHandle,
+) {
+    let locked = state.borrow_mut().toggle_position_locked();
+    if locked {
+        gesture.borrow_mut().cancel();
+    }
+    ui.set_position_locked(locked);
+    tray.set_position_locked(locked);
+    let snapshot = {
+        let mut config = config.borrow_mut();
+        config.position_locked = locked;
+        config.clone()
+    };
+    config_saver.request(snapshot);
+}
+
+fn sync_tray_state(tray: &AssistantTray, state: &WindowState) {
+    tray.set_window_visible(matches!(
+        state.phase(),
+        ApplicationPhase::Collapsed | ApplicationPhase::Expanded
+    ));
+    tray.set_expanded(state.phase() == ApplicationPhase::Expanded);
+    tray.set_always_on_top_enabled(state.always_on_top());
+    tray.set_position_locked(state.position_locked());
 }
 
 #[cfg(test)]
