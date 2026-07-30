@@ -173,6 +173,19 @@ pub fn clamp_window_to_nearest_screen(
     ))
 }
 
+pub fn clamp_window_for_mode(
+    position: PhysicalPosition,
+    window_size: PhysicalSize,
+    screens: &[ScreenBounds],
+    mode: WindowMode,
+) -> Option<PhysicalPosition> {
+    let minimum_visible = match mode {
+        WindowMode::Collapsed => 32,
+        WindowMode::Expanded => u32::MAX,
+    };
+    clamp_window_to_nearest_screen(position, window_size, screens, minimum_visible)
+}
+
 fn squared_distance_to_screen(point: PhysicalPosition, screen: ScreenBounds) -> i128 {
     let right = screen
         .position
@@ -374,7 +387,7 @@ mod tests {
     use super::{
         ApplicationPhase, DragDecision, DragGesture, PhysicalPosition, PhysicalSize,
         PointerPosition, ScreenBounds, WindowLayout, WindowMode, WindowState,
-        clamp_window_position, clamp_window_to_nearest_screen,
+        clamp_window_for_mode, clamp_window_position, clamp_window_to_nearest_screen,
     };
 
     #[test]
@@ -669,6 +682,56 @@ mod tests {
                 32,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn expanded_window_is_fully_moved_inside_the_work_area() {
+        let work_area = [ScreenBounds {
+            position: PhysicalPosition { x: 0, y: 0 },
+            size: PhysicalSize {
+                width: 1680,
+                height: 1072,
+            },
+        }];
+        let edge_position = PhysicalPosition { x: 1648, y: 900 };
+
+        assert_eq!(
+            clamp_window_for_mode(
+                edge_position,
+                PhysicalSize {
+                    width: 412,
+                    height: 640,
+                },
+                &work_area,
+                WindowMode::Expanded,
+            ),
+            Some(PhysicalPosition { x: 1268, y: 432 })
+        );
+    }
+
+    #[test]
+    fn collapsed_window_can_keep_only_a_visible_edge_strip() {
+        let work_area = [ScreenBounds {
+            position: PhysicalPosition { x: 0, y: 0 },
+            size: PhysicalSize {
+                width: 1680,
+                height: 1072,
+            },
+        }];
+        let edge_position = PhysicalPosition { x: 1648, y: 900 };
+
+        assert_eq!(
+            clamp_window_for_mode(
+                edge_position,
+                PhysicalSize {
+                    width: 200,
+                    height: 200,
+                },
+                &work_area,
+                WindowMode::Collapsed,
+            ),
+            Some(edge_position)
         );
     }
 }

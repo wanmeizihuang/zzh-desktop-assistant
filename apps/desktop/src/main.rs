@@ -18,10 +18,12 @@ use std::{
 
 use app_core::{
     ApplicationPhase, DragDecision, DragGesture, PhysicalPosition as CorePhysicalPosition,
-    PhysicalSize as CorePhysicalSize, PointerPosition, WindowState, clamp_window_to_nearest_screen,
+    PhysicalSize as CorePhysicalSize, PointerPosition, WindowMode, WindowState,
+    clamp_window_for_mode,
     config::{AppConfig, ConfigLoadStatus, ConfigStore},
 };
 use slint::ComponentHandle;
+use slint::winit_030::winit::platform::windows::WindowExtWindows;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use system_monitor::{MetricSnapshot, MetricValue, SourceStatus, SystemSampler};
 
@@ -48,6 +50,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config_worker = ConfigWorker::start(config_store)?;
     let ui = AppWindow::new()?;
     let tray = AssistantTray::new()?;
+    ui.window()
+        .with_winit_window(|window| window.set_skip_taskbar(true));
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
     let saved_window_position = config.borrow().window_position;
     let startup_enabled = Rc::new(Cell::new(startup::is_enabled().unwrap_or_else(|error| {
@@ -701,6 +705,7 @@ fn register_window_events(
                     &config,
                     &config_saver,
                     false,
+                    state.borrow().mode(),
                 );
             });
 
@@ -732,6 +737,7 @@ fn restore_saved_window_position_later(
                     &config,
                     &config_saver,
                     true,
+                    WindowMode::Collapsed,
                 );
             });
         });
@@ -744,17 +750,18 @@ fn recover_and_store_window_position(
     config: &RefCell<AppConfig>,
     config_saver: &ConfigSaveHandle,
     force_position: bool,
+    mode: WindowMode,
 ) -> CorePhysicalPosition {
     let window_size = window.outer_size();
     let position = match display::work_areas() {
-        Ok(work_areas) => clamp_window_to_nearest_screen(
+        Ok(work_areas) => clamp_window_for_mode(
             requested_position,
             CorePhysicalSize {
                 width: window_size.width,
                 height: window_size.height,
             },
             &work_areas,
-            32,
+            mode,
         )
         .unwrap_or(requested_position),
         Err(error) => {
