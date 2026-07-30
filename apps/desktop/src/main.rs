@@ -31,8 +31,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
     let monitor_worker = MonitorWorker::start(ui.as_weak())?;
 
-    register_window_bounds(&ui);
-    register_drag_callbacks(&ui, Rc::clone(&gesture));
+    state.borrow_mut().start();
+    ui.set_always_on_top_enabled(state.borrow().always_on_top());
+    ui.set_position_locked(state.borrow().position_locked());
+
+    register_window_events(&ui, Rc::clone(&state));
+    register_drag_callbacks(&ui, Rc::clone(&gesture), Rc::clone(&state));
+    register_behavior_callbacks(&ui, Rc::clone(&state), Rc::clone(&gesture));
 
     let ui_weak = ui.as_weak();
     let gesture_for_click = Rc::clone(&gesture);
@@ -219,7 +224,11 @@ fn format_rate(bytes_per_second: f64) -> String {
     }
 }
 
-fn register_drag_callbacks(ui: &AppWindow, gesture: Rc<RefCell<DragGesture>>) {
+fn register_drag_callbacks(
+    ui: &AppWindow,
+    gesture: Rc<RefCell<DragGesture>>,
+    state: Rc<RefCell<WindowState>>,
+) {
     let gesture_for_press = Rc::clone(&gesture);
     ui.on_drag_pointer_pressed(move |x, y| {
         gesture_for_press
@@ -229,6 +238,10 @@ fn register_drag_callbacks(ui: &AppWindow, gesture: Rc<RefCell<DragGesture>>) {
 
     let ui_weak = ui.as_weak();
     ui.on_drag_pointer_moved(move |x, y| {
+        if !state.borrow().can_drag() {
+            return;
+        }
+
         let decision = gesture.borrow_mut().move_to(PointerPosition { x, y });
         if decision != DragDecision::BeginDrag {
             return;
@@ -246,58 +259,118 @@ fn register_drag_callbacks(ui: &AppWindow, gesture: Rc<RefCell<DragGesture>>) {
     });
 }
 
-fn register_window_bounds(ui: &AppWindow) {
-    ui.window().on_winit_window_event(|slint_window, event| {
-        let winit::event::WindowEvent::Moved(position) = event else {
-            return EventResult::Propagate;
+fn register_behavior_callbacks(
+    ui: &AppWindow,
+    state: Rc<RefCell<WindowState>>,
+    gesture: Rc<RefCell<DragGesture>>,
+) {
+    let ui_weak = ui.as_weak();
+    let state_for_topmost = Rc::clone(&state);
+    ui.on_always_on_top_toggle_requested(move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
         };
 
-        slint_window.with_winit_window(|window| {
-            let Some(monitor) = window
-                .current_monitor()
-                .or_else(|| window.primary_monitor())
-            else {
-                return;
+        let enabled = state_for_topmost.borrow_mut().toggle_always_on_top();
+        ui.set_always_on_top_enabled(enabled);
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_position_lock_toggle_requested(move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+
+        let locked = state.borrow_mut().toggle_position_locked();
+        if locked {
+            gesture.borrow_mut().cancel();
+        }
+        ui.set_position_locked(locked);
+    });
+}
+
+fn register_window_events(ui: &AppWindow, state: Rc<RefCell<WindowState>>) {
+    let ui_weak = ui.as_weak();
+    ui.window()
+        .on_winit_window_event(move |slint_window, event| {
+            if let winit::event::WindowEvent::KeyboardInput { event, .. } = event
+                && event.state == winit::event::ElementState::Pressed
+                && !event.repeat
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            {
+                let Some(ui) = ui_weak.upgrade() else {
+                    return EventResult::Propagate;
+                };
+
+                if collapse_window(&ui, &state) {
+                    return EventResult::PreventDefault;
+                }
+                return EventResult::Propagate;
+            }
+
+            let winit::event::WindowEvent::Moved(position) = event else {
+                return EventResult::Propagate;
             };
 
-            let monitor_position = monitor.position();
-            let monitor_size = monitor.size();
-            let window_size = window.outer_size();
-            let clamped = clamp_window_position(
-                CorePhysicalPosition {
-                    x: position.x,
-                    y: position.y,
-                },
-                CorePhysicalSize {
-                    width: window_size.width,
-                    height: window_size.height,
-                },
-                ScreenBounds {
-                    position: CorePhysicalPosition {
-                        x: monitor_position.x,
-                        y: monitor_position.y,
-                    },
-                    size: CorePhysicalSize {
-                        width: monitor_size.width,
-                        height: monitor_size.height,
-                    },
-                },
-                32,
-            );
+            slint_window.with_winit_window(|window| {
+                let Some(monitor) = window
+                    .current_monitor()
+                    .or_else(|| window.primary_monitor())
+                else {
+                    return;
+                };
 
-            if clamped.x != position.x || clamped.y != position.y {
-                window.set_outer_position(winit::dpi::PhysicalPosition::new(clamped.x, clamped.y));
-            }
+                let monitor_position = monitor.position();
+                let monitor_size = monitor.size();
+                let window_size = window.outer_size();
+                let clamped = clamp_window_position(
+                    CorePhysicalPosition {
+                        x: position.x,
+                        y: position.y,
+                    },
+                    CorePhysicalSize {
+                        width: window_size.width,
+                        height: window_size.height,
+                    },
+                    ScreenBounds {
+                        position: CorePhysicalPosition {
+                            x: monitor_position.x,
+                            y: monitor_position.y,
+                        },
+                        size: CorePhysicalSize {
+                            width: monitor_size.width,
+                            height: monitor_size.height,
+                        },
+                    },
+                    32,
+                );
+
+                if clamped.x != position.x || clamped.y != position.y {
+                    window.set_outer_position(winit::dpi::PhysicalPosition::new(
+                        clamped.x, clamped.y,
+                    ));
+                }
+            });
+
+            EventResult::Propagate
         });
-
-        EventResult::Propagate
-    });
 }
 
 fn toggle_window(ui: &AppWindow, state: &RefCell<WindowState>) {
     let mut state = state.borrow_mut();
     state.toggle();
     ui.set_expanded(state.mode().is_expanded());
+}
+
+fn collapse_window(ui: &AppWindow, state: &RefCell<WindowState>) -> bool {
+    let mut state = state.borrow_mut();
+    if state.collapse().is_none() {
+        return false;
+    }
+
+    ui.set_expanded(false);
+    true
 }
 
 #[cfg(test)]

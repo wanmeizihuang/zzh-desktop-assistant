@@ -79,9 +79,38 @@ component TabButton inherits Rectangle {
     }
 }
 
+component ToggleSwitch inherits Rectangle {
+    in property <bool> checked;
+    callback toggled;
+
+    width: 38px;
+    height: 24px;
+    background: root.checked ? #2f6bff : #dce2ec;
+    border-radius: 12px;
+
+    Rectangle {
+        x: root.checked ? 18px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        background: white;
+        border-radius: 9px;
+    }
+
+    TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.toggled(); }
+    }
+}
+
 export component AppWindow inherits Window {
     in-out property <bool> expanded: false;
     in-out property <int> active-tab: 0;
+    in-out property <bool> always-on-top-enabled: true;
+    in-out property <bool> position-locked: false;
     in property <string> cpu-value: "采样中";
     in property <string> cpu-detail: "正在建立差分基线";
     in property <string> memory-value: "采样中";
@@ -96,12 +125,14 @@ export component AppWindow inherits Window {
     callback mascot-clicked;
     callback drag-pointer-pressed(length, length);
     callback drag-pointer-moved(length, length);
+    callback always-on-top-toggle-requested;
+    callback position-lock-toggle-requested;
 
     width: root.expanded ? 412px : 200px;
     height: root.expanded ? 640px : 200px;
     background: transparent;
     no-frame: true;
-    always-on-top: true;
+    always-on-top: root.always-on-top-enabled;
     title: "晓曦桌面助手";
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 13px;
@@ -400,14 +431,24 @@ export component AppWindow inherits Window {
                 x: 0; y: 36px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
                 Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "始终置顶"; color: #1c2433; font-size: 13px; font-weight: 600; }
                 Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "让晓曦保持在其他窗口上方"; color: #8b94a6; font-size: 11px; }
-                Rectangle { x: parent.width - 50px; y: 20px; width: 38px; height: 24px; background: #2f6bff; border-radius: 12px; Rectangle { x: 18px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; } }
+                ToggleSwitch {
+                    x: parent.width - 50px;
+                    y: 20px;
+                    checked: root.always-on-top-enabled;
+                    toggled => { root.always-on-top-toggle-requested(); }
+                }
             }
 
             Rectangle {
                 x: 0; y: 112px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
                 Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "锁定位置"; color: #1c2433; font-size: 13px; font-weight: 600; }
                 Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "防止工作时误拖动助手"; color: #8b94a6; font-size: 11px; }
-                Rectangle { x: parent.width - 50px; y: 20px; width: 38px; height: 24px; background: #dce2ec; border-radius: 12px; Rectangle { x: 3px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; } }
+                ToggleSwitch {
+                    x: parent.width - 50px;
+                    y: 20px;
+                    checked: root.position-locked;
+                    toggled => { root.position-lock-toggle-requested(); }
+                }
             }
 
             Text { x: 0; y: 204px; width: parent.width; height: 24px; text: "采样频率"; color: #1c2433; font-size: 14px; font-weight: 700; }
@@ -420,7 +461,7 @@ export component AppWindow inherits Window {
             Rectangle {
                 x: 0; y: 316px; width: parent.width; height: 76px; background: #eaf1ff; border-radius: 8px;
                 Text { x: 12px; y: 11px; width: parent.width - 24px; height: 20px; text: "技术验证版本"; color: #1f53d6; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 35px; width: parent.width - 24px; height: 30px; text: "设置项将在后续里程碑接入本地配置。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
+                Text { x: 12px; y: 35px; width: parent.width - 24px; height: 30px; text: "桌面行为已生效，下一步接入本地配置。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
             }
         }
     }

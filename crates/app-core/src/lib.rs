@@ -70,6 +70,11 @@ impl DragGesture {
         self.drag_started = false;
         is_click
     }
+
+    pub fn cancel(&mut self) {
+        self.press_position = None;
+        self.drag_started = false;
+    }
 }
 
 impl Default for DragGesture {
@@ -176,47 +181,157 @@ impl WindowMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplicationPhase {
+    Starting,
+    Collapsed,
+    Expanded,
+    Hidden,
+    Exiting,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct WindowState {
-    mode: WindowMode,
+    phase: ApplicationPhase,
+    last_visible_mode: WindowMode,
+    always_on_top: bool,
+    position_locked: bool,
 }
 
 impl Default for WindowState {
     fn default() -> Self {
         Self {
-            mode: WindowMode::Collapsed,
+            phase: ApplicationPhase::Starting,
+            last_visible_mode: WindowMode::Collapsed,
+            always_on_top: true,
+            position_locked: false,
         }
     }
 }
 
 impl WindowState {
+    pub const fn phase(&self) -> ApplicationPhase {
+        self.phase
+    }
+
     pub const fn mode(&self) -> WindowMode {
-        self.mode
+        self.last_visible_mode
+    }
+
+    pub fn start(&mut self) -> WindowLayout {
+        if self.phase == ApplicationPhase::Starting {
+            self.phase = ApplicationPhase::Collapsed;
+            self.last_visible_mode = WindowMode::Collapsed;
+        }
+        self.last_visible_mode.layout()
     }
 
     pub fn toggle(&mut self) -> WindowLayout {
-        self.mode = self.mode.toggled();
-        self.mode.layout()
+        match self.phase {
+            ApplicationPhase::Collapsed | ApplicationPhase::Expanded => {
+                self.last_visible_mode = self.last_visible_mode.toggled();
+                self.phase = match self.last_visible_mode {
+                    WindowMode::Collapsed => ApplicationPhase::Collapsed,
+                    WindowMode::Expanded => ApplicationPhase::Expanded,
+                };
+            }
+            ApplicationPhase::Starting | ApplicationPhase::Hidden | ApplicationPhase::Exiting => {}
+        }
+        self.last_visible_mode.layout()
+    }
+
+    pub fn collapse(&mut self) -> Option<WindowLayout> {
+        if self.phase != ApplicationPhase::Expanded {
+            return None;
+        }
+
+        self.phase = ApplicationPhase::Collapsed;
+        self.last_visible_mode = WindowMode::Collapsed;
+        Some(WindowMode::COLLAPSED_LAYOUT)
+    }
+
+    pub fn hide(&mut self) -> bool {
+        match self.phase {
+            ApplicationPhase::Collapsed | ApplicationPhase::Expanded => {
+                self.phase = ApplicationPhase::Hidden;
+                true
+            }
+            ApplicationPhase::Starting | ApplicationPhase::Hidden | ApplicationPhase::Exiting => {
+                false
+            }
+        }
+    }
+
+    pub fn restore(&mut self) -> Option<WindowLayout> {
+        if self.phase != ApplicationPhase::Hidden {
+            return None;
+        }
+
+        self.phase = match self.last_visible_mode {
+            WindowMode::Collapsed => ApplicationPhase::Collapsed,
+            WindowMode::Expanded => ApplicationPhase::Expanded,
+        };
+        Some(self.last_visible_mode.layout())
+    }
+
+    pub fn exit(&mut self) -> bool {
+        if self.phase == ApplicationPhase::Exiting {
+            return false;
+        }
+
+        self.phase = ApplicationPhase::Exiting;
+        true
+    }
+
+    pub const fn always_on_top(&self) -> bool {
+        self.always_on_top
+    }
+
+    pub fn toggle_always_on_top(&mut self) -> bool {
+        self.always_on_top = !self.always_on_top;
+        self.always_on_top
+    }
+
+    pub const fn position_locked(&self) -> bool {
+        self.position_locked
+    }
+
+    pub fn toggle_position_locked(&mut self) -> bool {
+        self.position_locked = !self.position_locked;
+        self.position_locked
+    }
+
+    pub const fn can_drag(&self) -> bool {
+        !self.position_locked
+            && matches!(
+                self.phase,
+                ApplicationPhase::Collapsed | ApplicationPhase::Expanded
+            )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DragDecision, DragGesture, PhysicalPosition, PhysicalSize, PointerPosition, ScreenBounds,
-        WindowLayout, WindowMode, WindowState, clamp_window_position,
+        ApplicationPhase, DragDecision, DragGesture, PhysicalPosition, PhysicalSize,
+        PointerPosition, ScreenBounds, WindowLayout, WindowMode, WindowState,
+        clamp_window_position,
     };
 
     #[test]
     fn starts_collapsed_at_the_mascot_size() {
-        let state = WindowState::default();
+        let mut state = WindowState::default();
 
+        assert_eq!(state.phase(), ApplicationPhase::Starting);
+        let layout = state.start();
+
+        assert_eq!(state.phase(), ApplicationPhase::Collapsed);
         assert_eq!(state.mode(), WindowMode::Collapsed);
         assert_eq!(
-            state.mode().layout(),
+            layout,
             WindowLayout {
                 width: 200,
-                height: 200,
+                height: 200
             }
         );
     }
@@ -224,6 +339,7 @@ mod tests {
     #[test]
     fn first_toggle_expands_to_the_stable_panel_size() {
         let mut state = WindowState::default();
+        state.start();
 
         let layout = state.toggle();
 
@@ -240,12 +356,59 @@ mod tests {
     #[test]
     fn second_toggle_returns_to_the_collapsed_size() {
         let mut state = WindowState::default();
+        state.start();
         state.toggle();
 
         let layout = state.toggle();
 
         assert_eq!(state.mode(), WindowMode::Collapsed);
         assert_eq!(layout, WindowMode::COLLAPSED_LAYOUT);
+    }
+
+    #[test]
+    fn collapse_only_changes_the_expanded_phase() {
+        let mut state = WindowState::default();
+        state.start();
+
+        assert_eq!(state.collapse(), None);
+        state.toggle();
+        assert_eq!(state.collapse(), Some(WindowMode::COLLAPSED_LAYOUT));
+        assert_eq!(state.phase(), ApplicationPhase::Collapsed);
+    }
+
+    #[test]
+    fn hiding_and_restoring_preserves_the_last_visible_mode() {
+        let mut state = WindowState::default();
+        state.start();
+        state.toggle();
+
+        assert!(state.hide());
+        assert_eq!(state.phase(), ApplicationPhase::Hidden);
+        assert_eq!(state.restore(), Some(WindowMode::EXPANDED_LAYOUT));
+        assert_eq!(state.phase(), ApplicationPhase::Expanded);
+    }
+
+    #[test]
+    fn exiting_is_terminal() {
+        let mut state = WindowState::default();
+        state.start();
+
+        assert!(state.exit());
+        assert_eq!(state.phase(), ApplicationPhase::Exiting);
+        assert!(!state.exit());
+        assert!(!state.hide());
+        assert_eq!(state.restore(), None);
+    }
+
+    #[test]
+    fn desktop_behavior_defaults_are_work_friendly_and_toggleable() {
+        let mut state = WindowState::default();
+
+        assert!(state.always_on_top());
+        assert!(!state.position_locked());
+        assert!(!state.toggle_always_on_top());
+        assert!(state.toggle_position_locked());
+        assert!(!state.can_drag());
     }
 
     #[test]
@@ -285,6 +448,16 @@ mod tests {
         gesture.press(PointerPosition { x: 20.0, y: 20.0 });
 
         assert!(gesture.take_click());
+    }
+
+    #[test]
+    fn cancelling_a_gesture_suppresses_the_pending_click() {
+        let mut gesture = DragGesture::default();
+        gesture.press(PointerPosition { x: 10.0, y: 10.0 });
+
+        gesture.cancel();
+
+        assert!(!gesture.take_click());
     }
 
     #[test]
