@@ -149,10 +149,7 @@ fn send_chunks(
     false
 }
 
-fn wait_for_delay_or_cancellation(
-    delay: Duration,
-    cancellation: &CancellationToken,
-) -> bool {
+fn wait_for_delay_or_cancellation(delay: Duration, cancellation: &CancellationToken) -> bool {
     let deadline = Instant::now() + delay;
     loop {
         if cancellation.is_cancelled() {

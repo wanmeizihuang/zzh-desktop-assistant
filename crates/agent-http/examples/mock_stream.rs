@@ -15,9 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{event:?}");
         if matches!(
             event,
-            AgentEvent::Completed { .. }
-                | AgentEvent::Cancelled { .. }
-                | AgentEvent::Failed { .. }
+            AgentEvent::Completed { .. } | AgentEvent::Cancelled { .. } | AgentEvent::Failed { .. }
         ) {
             break;
         }

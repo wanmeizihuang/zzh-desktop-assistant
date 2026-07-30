@@ -12,10 +12,7 @@ fn fixture_command(mode: &str) -> CliCommandSpec {
 fn cli_streams_real_child_process_stdout_in_order() {
     let connector = CliConnector::new(fixture_command("stream"));
     let run = connector
-        .start(AgentRequest::single_user_message(
-            RequestId(11),
-            "hello",
-        ))
+        .start(AgentRequest::single_user_message(RequestId(11), "hello"))
         .unwrap();
 
     assert!(matches!(
@@ -61,9 +58,7 @@ fn non_zero_exit_becomes_a_process_error_with_bounded_stderr() {
         .start(AgentRequest::single_user_message(RequestId(13), "hi"))
         .unwrap();
     let _ = run.recv_timeout(Duration::from_secs(2)).unwrap();
-    let AgentEvent::Failed { error, .. } =
-        run.recv_timeout(Duration::from_secs(2)).unwrap()
-    else {
+    let AgentEvent::Failed { error, .. } = run.recv_timeout(Duration::from_secs(2)).unwrap() else {
         panic!("expected a failed event");
     };
 

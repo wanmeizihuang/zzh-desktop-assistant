@@ -193,12 +193,7 @@ fn run_cli_process(
     let mut output_error = None;
 
     loop {
-        if !forward_output(
-            &output_receiver,
-            &sender,
-            request_id,
-            &mut output_error,
-        ) {
+        if !forward_output(&output_receiver, &sender, request_id, &mut output_error) {
             terminate_child(&mut child);
             let _ = stdout_thread.join();
             let _ = stderr_thread.join();
@@ -217,21 +212,10 @@ fn run_cli_process(
             Ok(Some(status)) => {
                 let _ = stdout_thread.join();
                 let stderr = stderr_thread.join().unwrap_or_default();
-                if !forward_output(
-                    &output_receiver,
-                    &sender,
-                    request_id,
-                    &mut output_error,
-                ) {
+                if !forward_output(&output_receiver, &sender, request_id, &mut output_error) {
                     return;
                 }
-                send_process_terminal_event(
-                    &sender,
-                    request_id,
-                    status,
-                    stderr,
-                    output_error,
-                );
+                send_process_terminal_event(&sender, request_id, status, stderr, output_error);
                 return;
             }
             Ok(None) => thread::sleep(poll_interval),

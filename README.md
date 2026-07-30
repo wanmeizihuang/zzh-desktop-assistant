@@ -12,6 +12,7 @@
 - CPU、物理内存、GPU、显存和非回环网卡上下行速率每 2 秒真实刷新。
 - GPU 利用率取整机最忙物理引擎；显存显示当前最活跃硬件适配器的总 GPU 内存占用。
 - 温度仍处于后续验证阶段，界面明确显示“待接入”。
+- 已完成运行时无关的智能体连接器契约、无网络 HTTP 流模拟器和真实子进程 CLI 原型。
 
 ## 本地运行
 
@@ -33,6 +34,9 @@ cargo test --workspace
 
 ```text
 apps/desktop/       Slint 窗口与应用入口
+crates/agent-core/  智能体请求、能力、事件、错误与取消契约
+crates/agent-http/  可脚本化的无网络 HTTP 流原型
+crates/agent-cli/   使用参数数组和标准输入输出的本地 CLI 原型
 crates/app-core/    不依赖 UI 的应用状态
 crates/system-monitor/ Windows 原生系统指标采样
 docs/               架构、计划、ADR 与验证报告

@@ -1,8 +1,7 @@
 use std::{
     env,
     io::{self, Read, Write},
-    process,
-    thread,
+    process, thread,
     time::Duration,
 };
 
@@ -30,4 +29,3 @@ fn main() -> io::Result<()> {
     }
     Ok(())
 }
-

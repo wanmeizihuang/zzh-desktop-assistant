@@ -249,6 +249,12 @@ impl AgentRun {
     }
 }
 
+impl Drop for AgentRun {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
+}
+
 pub trait AgentConnector: Send + Sync {
     fn descriptor(&self) -> &ConnectorDescriptor;
 
@@ -259,7 +265,10 @@ pub fn validate_request(
     request: &AgentRequest,
     capabilities: ConnectorCapabilities,
 ) -> Result<(), ConnectorError> {
-    if request.latest_user_text().is_none_or(|text| text.trim().is_empty()) {
+    if request
+        .latest_user_text()
+        .is_none_or(|text| text.trim().is_empty())
+    {
         return Err(ConnectorError::new(
             ConnectorErrorCode::InvalidRequest,
             "request must contain a non-empty user message",
@@ -370,6 +379,17 @@ mod tests {
                 request_id: RequestId(9)
             }
         );
+    }
+
+    #[test]
+    fn dropping_a_run_cancels_its_worker_token() {
+        let (_sender, receiver) = mpsc::channel();
+        let run = AgentRun::new(receiver, CancellationToken::new());
+        let worker_token = run.cancellation_token();
+
+        drop(run);
+
+        assert!(worker_token.is_cancelled());
     }
 
     #[test]
