@@ -2,7 +2,10 @@
 
 use std::{
     cell::RefCell,
+    env,
     error::Error,
+    io,
+    path::PathBuf,
     rc::Rc,
     sync::mpsc::{self, RecvTimeoutError, Sender},
     thread::{self, JoinHandle},
@@ -13,6 +16,7 @@ use app_core::{
     DragDecision, DragGesture, PhysicalPosition as CorePhysicalPosition,
     PhysicalSize as CorePhysicalSize, PointerPosition, ScreenBounds, WindowState,
     clamp_window_position,
+    config::{AppConfig, ConfigLoadStatus, ConfigStore},
 };
 use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
@@ -26,8 +30,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .renderer_name("software".into())
         .select()?;
 
+    let config_store = ConfigStore::new(local_config_path()?);
+    let loaded_config = load_config_or_default(&config_store);
+    let config = Rc::new(RefCell::new(loaded_config));
+    let state = Rc::new(RefCell::new(WindowState::with_behavior(
+        config.borrow().always_on_top,
+        config.borrow().position_locked,
+    )));
+    let config_worker = ConfigWorker::start(config_store)?;
     let ui = AppWindow::new()?;
-    let state = Rc::new(RefCell::new(WindowState::default()));
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
     let monitor_worker = MonitorWorker::start(ui.as_weak())?;
 
@@ -35,9 +46,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     ui.set_always_on_top_enabled(state.borrow().always_on_top());
     ui.set_position_locked(state.borrow().position_locked());
 
-    register_window_events(&ui, Rc::clone(&state));
+    register_window_events(
+        &ui,
+        Rc::clone(&state),
+        Rc::clone(&config),
+        config_worker.handle(),
+    );
     register_drag_callbacks(&ui, Rc::clone(&gesture), Rc::clone(&state));
-    register_behavior_callbacks(&ui, Rc::clone(&state), Rc::clone(&gesture));
+    register_behavior_callbacks(
+        &ui,
+        Rc::clone(&state),
+        Rc::clone(&gesture),
+        Rc::clone(&config),
+        config_worker.handle(),
+    );
+
+    if let Some(position) = config.borrow().window_position {
+        ui.window()
+            .set_position(slint::PhysicalPosition::new(position.x, position.y));
+    }
 
     let ui_weak = ui.as_weak();
     let gesture_for_click = Rc::clone(&gesture);
@@ -67,7 +94,125 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let result = ui.run();
     drop(monitor_worker);
+    drop(config_worker);
     result.map_err(Into::into)
+}
+
+fn local_config_path() -> io::Result<PathBuf> {
+    let local_app_data = env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty());
+    let Some(local_app_data) = local_app_data else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "LOCALAPPDATA is not available",
+        ));
+    };
+
+    Ok(PathBuf::from(local_app_data)
+        .join("Xiaoxi Desktop Assistant")
+        .join("settings.json"))
+}
+
+fn load_config_or_default(store: &ConfigStore) -> AppConfig {
+    match store.load() {
+        Ok(loaded) => {
+            if let ConfigLoadStatus::RecoveredCorrupt { backup_path } = loaded.status {
+                eprintln!(
+                    "recovered corrupt configuration; backup saved at {}",
+                    backup_path.display()
+                );
+            }
+            loaded.config
+        }
+        Err(error) => {
+            eprintln!(
+                "failed to load configuration from {}: {error}",
+                store.path().display()
+            );
+            AppConfig::default()
+        }
+    }
+}
+
+enum ConfigCommand {
+    Save(AppConfig),
+    Stop,
+}
+
+#[derive(Clone)]
+struct ConfigSaveHandle {
+    sender: Sender<ConfigCommand>,
+}
+
+impl ConfigSaveHandle {
+    fn request(&self, config: AppConfig) {
+        if self.sender.send(ConfigCommand::Save(config)).is_err() {
+            eprintln!("configuration worker is no longer available");
+        }
+    }
+}
+
+struct ConfigWorker {
+    handle: ConfigSaveHandle,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl ConfigWorker {
+    const SAVE_DELAY: Duration = Duration::from_millis(300);
+
+    fn start(store: ConfigStore) -> io::Result<Self> {
+        let (sender, receiver) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("config-writer".into())
+            .spawn(move || Self::run(receiver, store))?;
+        Ok(Self {
+            handle: ConfigSaveHandle { sender },
+            thread: Some(thread),
+        })
+    }
+
+    fn handle(&self) -> ConfigSaveHandle {
+        self.handle.clone()
+    }
+
+    fn run(receiver: mpsc::Receiver<ConfigCommand>, store: ConfigStore) {
+        while let Ok(command) = receiver.recv() {
+            let ConfigCommand::Save(mut pending) = command else {
+                return;
+            };
+
+            loop {
+                match receiver.recv_timeout(Self::SAVE_DELAY) {
+                    Ok(ConfigCommand::Save(config)) => pending = config,
+                    Ok(ConfigCommand::Stop) | Err(RecvTimeoutError::Disconnected) => {
+                        save_config(&store, &pending);
+                        return;
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        save_config(&store, &pending);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ConfigWorker {
+    fn drop(&mut self) {
+        let _ = self.handle.sender.send(ConfigCommand::Stop);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn save_config(store: &ConfigStore, config: &AppConfig) {
+    if let Err(error) = store.save(config) {
+        eprintln!(
+            "failed to save configuration to {}: {error}",
+            store.path().display()
+        );
+    }
 }
 
 struct MonitorWorker {
@@ -263,9 +408,13 @@ fn register_behavior_callbacks(
     ui: &AppWindow,
     state: Rc<RefCell<WindowState>>,
     gesture: Rc<RefCell<DragGesture>>,
+    config: Rc<RefCell<AppConfig>>,
+    config_saver: ConfigSaveHandle,
 ) {
     let ui_weak = ui.as_weak();
     let state_for_topmost = Rc::clone(&state);
+    let config_for_topmost = Rc::clone(&config);
+    let saver_for_topmost = config_saver.clone();
     ui.on_always_on_top_toggle_requested(move || {
         let Some(ui) = ui_weak.upgrade() else {
             return;
@@ -273,6 +422,12 @@ fn register_behavior_callbacks(
 
         let enabled = state_for_topmost.borrow_mut().toggle_always_on_top();
         ui.set_always_on_top_enabled(enabled);
+        let snapshot = {
+            let mut config = config_for_topmost.borrow_mut();
+            config.always_on_top = enabled;
+            config.clone()
+        };
+        saver_for_topmost.request(snapshot);
     });
 
     let ui_weak = ui.as_weak();
@@ -286,10 +441,21 @@ fn register_behavior_callbacks(
             gesture.borrow_mut().cancel();
         }
         ui.set_position_locked(locked);
+        let snapshot = {
+            let mut config = config.borrow_mut();
+            config.position_locked = locked;
+            config.clone()
+        };
+        config_saver.request(snapshot);
     });
 }
 
-fn register_window_events(ui: &AppWindow, state: Rc<RefCell<WindowState>>) {
+fn register_window_events(
+    ui: &AppWindow,
+    state: Rc<RefCell<WindowState>>,
+    config: Rc<RefCell<AppConfig>>,
+    config_saver: ConfigSaveHandle,
+) {
     let ui_weak = ui.as_weak();
     ui.window()
         .on_winit_window_event(move |slint_window, event| {
@@ -351,6 +517,23 @@ fn register_window_events(ui: &AppWindow, state: Rc<RefCell<WindowState>>) {
                         clamped.x, clamped.y,
                     ));
                 }
+
+                let position = CorePhysicalPosition {
+                    x: clamped.x,
+                    y: clamped.y,
+                };
+                let snapshot = {
+                    let mut config = config.borrow_mut();
+                    if config.window_position == Some(position) {
+                        None
+                    } else {
+                        config.window_position = Some(position);
+                        Some(config.clone())
+                    }
+                };
+                if let Some(snapshot) = snapshot {
+                    config_saver.request(snapshot);
+                }
             });
 
             EventResult::Propagate
@@ -375,9 +558,44 @@ fn collapse_window(ui: &AppWindow, state: &RefCell<WindowState>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use app_core::{
+        PhysicalPosition,
+        config::{AppConfig, ConfigStore},
+    };
     use system_monitor::{MemoryUsage, MetricValue, SourceStatus, VideoMemoryUsage};
 
-    use super::{format_gpu, format_memory, format_rate, format_video_memory};
+    use super::{ConfigWorker, format_gpu, format_memory, format_rate, format_video_memory};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn config_worker_flushes_the_latest_pending_save_when_dropped() {
+        let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "xiaoxi-config-worker-{}-{sequence}",
+            std::process::id()
+        ));
+        let path = directory.join("settings.json");
+        let store = ConfigStore::new(&path);
+        let worker = ConfigWorker::start(store.clone()).expect("start config worker");
+        let handle = worker.handle();
+        handle.request(AppConfig::default());
+        let mut expected = AppConfig::default();
+        expected.window_position = Some(PhysicalPosition { x: 320, y: 180 });
+        expected.always_on_top = false;
+        expected.position_locked = true;
+        handle.request(expected.clone());
+
+        drop(worker);
+
+        assert_eq!(store.load().expect("load saved config").config, expected);
+        let _ = fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn network_rate_uses_compact_binary_units() {

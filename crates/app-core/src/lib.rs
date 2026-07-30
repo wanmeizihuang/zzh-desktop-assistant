@@ -1,3 +1,5 @@
+pub mod config;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowMode {
     Collapsed,
@@ -83,7 +85,7 @@ impl Default for DragGesture {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PhysicalPosition {
     pub x: i32,
     pub y: i32,
@@ -210,6 +212,15 @@ impl Default for WindowState {
 }
 
 impl WindowState {
+    pub const fn with_behavior(always_on_top: bool, position_locked: bool) -> Self {
+        Self {
+            phase: ApplicationPhase::Starting,
+            last_visible_mode: WindowMode::Collapsed,
+            always_on_top,
+            position_locked,
+        }
+    }
+
     pub const fn phase(&self) -> ApplicationPhase {
         self.phase
     }
@@ -408,6 +419,17 @@ mod tests {
         assert!(!state.position_locked());
         assert!(!state.toggle_always_on_top());
         assert!(state.toggle_position_locked());
+        assert!(!state.can_drag());
+    }
+
+    #[test]
+    fn desktop_behavior_can_be_restored_before_startup() {
+        let mut state = WindowState::with_behavior(false, true);
+
+        state.start();
+
+        assert!(!state.always_on_top());
+        assert!(state.position_locked());
         assert!(!state.can_drag());
     }
 
