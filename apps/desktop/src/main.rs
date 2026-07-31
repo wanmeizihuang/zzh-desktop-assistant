@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ui.set_always_on_top_enabled(state.borrow().always_on_top());
     ui.set_position_locked(state.borrow().position_locked());
     ui.set_startup_enabled(startup_enabled.get());
-    sync_tray_state(&tray, &state.borrow());
+    sync_tray_state(&tray, &state);
     tray.set_startup_enabled(startup_enabled.get());
 
     register_window_events(
@@ -824,7 +824,6 @@ fn show_native_window(ui: &AppWindow, focus: bool) {
 
 fn apply_native_window_state(ui: &AppWindow, focus: bool) {
     ui.window().with_winit_window(|window| {
-        window.set_visible(true);
         window.set_skip_taskbar(true);
         if let Err(error) = display::enforce_tool_window(window) {
             eprintln!("failed to hide the assistant taskbar entry: {error}");
@@ -833,6 +832,7 @@ fn apply_native_window_state(ui: &AppWindow, focus: bool) {
             window.focus_window();
         }
     });
+    ui.window().request_redraw();
 }
 
 fn recover_and_store_window_position(
@@ -906,10 +906,9 @@ fn toggle_window(
     }
 
     remember_collapsed_position(ui, state);
-    let mut state = state.borrow_mut();
-    state.toggle();
+    state.borrow_mut().toggle();
     ui.set_expanded(true);
-    sync_tray_state(tray, &state);
+    sync_tray_state(tray, state);
 }
 
 fn collapse_window(
@@ -924,10 +923,9 @@ fn collapse_window(
         if state.collapse().is_none() {
             return false;
         }
-        let collapsed_position = state.take_collapsed_position();
-        sync_tray_state(tray, &state);
-        collapsed_position
+        state.take_collapsed_position()
     };
+    sync_tray_state(tray, state);
     ui.set_expanded(false);
     if let Some(position) = collapsed_position {
         restore_collapsed_position_later(ui, position, Rc::clone(config), config_saver.clone());
@@ -936,31 +934,28 @@ fn collapse_window(
 }
 
 fn hide_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
-    {
-        let mut state = state.borrow_mut();
-        if !state.hide() {
-            return;
-        }
-        sync_tray_state(tray, &state);
+    if !state.borrow_mut().hide() {
+        return;
     }
+    sync_tray_state(tray, state);
 
-    ui.window()
-        .with_winit_window(|window| window.set_visible(false));
     if let Err(error) = ui.hide() {
         eprintln!("failed to hide the assistant window: {error}");
     }
 }
 
 fn restore_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
-    let mut state = state.borrow_mut();
-    if state.phase() == ApplicationPhase::Exiting {
-        return;
-    }
-    if let Some(layout) = state.restore() {
+    let restored_layout = {
+        let mut state = state.borrow_mut();
+        if state.phase() == ApplicationPhase::Exiting {
+            return;
+        }
+        state.restore()
+    };
+    if let Some(layout) = restored_layout {
         ui.set_expanded(layout.width > app_core::WindowMode::COLLAPSED_LAYOUT.width);
     }
-    sync_tray_state(tray, &state);
-    drop(state);
+    sync_tray_state(tray, state);
 
     if let Err(error) = ui.show() {
         eprintln!("failed to show the assistant window: {error}");
@@ -976,13 +971,12 @@ fn open_settings(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowSta
         remember_collapsed_position(ui, state);
         state.borrow_mut().toggle();
     }
-    let state = state.borrow();
-    if state.phase() != ApplicationPhase::Expanded {
+    if state.borrow().phase() != ApplicationPhase::Expanded {
         return;
     }
     ui.set_expanded(true);
     ui.set_active_tab(2);
-    sync_tray_state(tray, &state);
+    sync_tray_state(tray, state);
 }
 
 fn toggle_always_on_top(
@@ -1037,14 +1031,22 @@ fn toggle_startup(ui: &AppWindow, tray: &AssistantTray, enabled: &Cell<bool>) {
     tray.set_startup_enabled(requested);
 }
 
-fn sync_tray_state(tray: &AssistantTray, state: &WindowState) {
+fn sync_tray_state(tray: &AssistantTray, state: &RefCell<WindowState>) {
+    let (phase, always_on_top, position_locked) = {
+        let state = state.borrow();
+        (
+            state.phase(),
+            state.always_on_top(),
+            state.position_locked(),
+        )
+    };
     tray.set_window_visible(matches!(
-        state.phase(),
+        phase,
         ApplicationPhase::Collapsed | ApplicationPhase::Expanded
     ));
-    tray.set_expanded(state.phase() == ApplicationPhase::Expanded);
-    tray.set_always_on_top_enabled(state.always_on_top());
-    tray.set_position_locked(state.position_locked());
+    tray.set_expanded(phase == ApplicationPhase::Expanded);
+    tray.set_always_on_top_enabled(always_on_top);
+    tray.set_position_locked(position_locked);
 }
 
 #[cfg(test)]
