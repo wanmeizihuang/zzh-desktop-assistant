@@ -259,6 +259,7 @@ pub struct WindowState {
     last_visible_mode: WindowMode,
     always_on_top: bool,
     position_locked: bool,
+    collapsed_position: Option<PhysicalPosition>,
 }
 
 impl Default for WindowState {
@@ -268,6 +269,7 @@ impl Default for WindowState {
             last_visible_mode: WindowMode::Collapsed,
             always_on_top: true,
             position_locked: false,
+            collapsed_position: None,
         }
     }
 }
@@ -279,6 +281,7 @@ impl WindowState {
             last_visible_mode: WindowMode::Collapsed,
             always_on_top,
             position_locked,
+            collapsed_position: None,
         }
     }
 
@@ -373,6 +376,18 @@ impl WindowState {
         self.position_locked
     }
 
+    pub fn remember_collapsed_position(&mut self, position: PhysicalPosition) -> bool {
+        if self.phase != ApplicationPhase::Collapsed {
+            return false;
+        }
+        self.collapsed_position = Some(position);
+        true
+    }
+
+    pub fn take_collapsed_position(&mut self) -> Option<PhysicalPosition> {
+        self.collapsed_position.take()
+    }
+
     pub const fn can_drag(&self) -> bool {
         !self.position_locked
             && matches!(
@@ -458,6 +473,20 @@ mod tests {
         assert_eq!(state.phase(), ApplicationPhase::Hidden);
         assert_eq!(state.restore(), Some(WindowMode::EXPANDED_LAYOUT));
         assert_eq!(state.phase(), ApplicationPhase::Expanded);
+    }
+
+    #[test]
+    fn expanded_cycle_restores_the_remembered_collapsed_position_once() {
+        let mut state = WindowState::default();
+        state.start();
+        let position = PhysicalPosition { x: 1648, y: 900 };
+
+        assert!(state.remember_collapsed_position(position));
+        state.toggle();
+        assert!(!state.remember_collapsed_position(PhysicalPosition { x: 1268, y: 432 }));
+        assert_eq!(state.collapse(), Some(WindowMode::COLLAPSED_LAYOUT));
+        assert_eq!(state.take_collapsed_position(), Some(position));
+        assert_eq!(state.take_collapsed_position(), None);
     }
 
     #[test]

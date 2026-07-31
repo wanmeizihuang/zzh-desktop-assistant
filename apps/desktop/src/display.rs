@@ -7,9 +7,13 @@ use slint::winit_030::winit::{
 };
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, RECT},
+        Foundation::{ERROR_SUCCESS, GetLastError, HWND, LPARAM, RECT, SetLastError},
         Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO},
-        UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos},
+        UI::WindowsAndMessaging::{
+            GWL_EXSTYLE, GetWindowLongPtrW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_EX_APPWINDOW,
+            WS_EX_TOOLWINDOW,
+        },
     },
     core::BOOL,
 };
@@ -18,13 +22,7 @@ pub fn set_window_position(
     window: &winit::window::Window,
     position: PhysicalPosition,
 ) -> io::Result<()> {
-    let window_handle = window
-        .window_handle()
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    let RawWindowHandle::Win32(window_handle) = window_handle.as_raw() else {
-        return Err(io::Error::other("expected a Win32 window handle"));
-    };
-    let hwnd = HWND(window_handle.hwnd.get() as *mut core::ffi::c_void);
+    let hwnd = native_window_handle(window)?;
 
     unsafe {
         SetWindowPos(
@@ -38,6 +36,44 @@ pub fn set_window_position(
         )
     }
     .map_err(|error| io::Error::other(error.to_string()))
+}
+
+pub fn enforce_tool_window(window: &winit::window::Window) -> io::Result<()> {
+    let hwnd = native_window_handle(window)?;
+    let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    let tool_style = (current_style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
+
+    unsafe { SetLastError(ERROR_SUCCESS) };
+    let previous = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, tool_style as isize) };
+    if previous == 0 {
+        let error = unsafe { GetLastError() };
+        if error != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(error.0 as i32));
+        }
+    }
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    }
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
+fn native_window_handle(window: &winit::window::Window) -> io::Result<HWND> {
+    let window_handle = window
+        .window_handle()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let RawWindowHandle::Win32(window_handle) = window_handle.as_raw() else {
+        return Err(io::Error::other("expected a Win32 window handle"));
+    };
+    Ok(HWND(window_handle.hwnd.get() as *mut core::ffi::c_void))
 }
 
 pub fn work_areas() -> io::Result<Vec<ScreenBounds>> {

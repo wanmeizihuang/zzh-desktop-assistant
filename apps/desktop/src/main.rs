@@ -50,8 +50,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config_worker = ConfigWorker::start(config_store)?;
     let ui = AppWindow::new()?;
     let tray = AssistantTray::new()?;
-    ui.window()
-        .with_winit_window(|window| window.set_skip_taskbar(true));
     let gesture = Rc::new(RefCell::new(DragGesture::default()));
     let saved_window_position = config.borrow().window_position;
     let startup_enabled = Rc::new(Cell::new(startup::is_enabled().unwrap_or_else(|error| {
@@ -97,6 +95,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui_weak = ui.as_weak();
     let gesture_for_click = Rc::clone(&gesture);
     let state_for_click = Rc::clone(&state);
+    let config_for_click = Rc::clone(&config);
+    let saver_for_click = config_worker.handle();
     let tray_weak = tray.as_weak();
 
     ui.on_mascot_clicked(move || {
@@ -111,13 +111,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         let Some(tray) = tray_weak.upgrade() else {
             return;
         };
-        toggle_window(&ui, &tray, &state_for_click);
+        toggle_window(
+            &ui,
+            &tray,
+            &state_for_click,
+            &config_for_click,
+            &saver_for_click,
+        );
     });
 
     let ui_weak = ui.as_weak();
 
     let tray_weak = tray.as_weak();
     let state_for_toggle = Rc::clone(&state);
+    let config_for_toggle = Rc::clone(&config);
+    let saver_for_toggle = config_worker.handle();
     ui.on_toggle_requested(move || {
         let Some(ui) = ui_weak.upgrade() else {
             return;
@@ -126,7 +134,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             return;
         };
 
-        toggle_window(&ui, &tray, &state_for_toggle);
+        toggle_window(
+            &ui,
+            &tray,
+            &state_for_toggle,
+            &config_for_toggle,
+            &saver_for_toggle,
+        );
     });
 
     let ui_weak = ui.as_weak();
@@ -150,6 +164,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     ui.show()?;
+    show_native_window(&ui, false);
     restore_saved_window_position_later(
         &ui,
         saved_window_position,
@@ -567,11 +582,19 @@ fn register_tray_callbacks(
     let ui_weak = ui.as_weak();
     let tray_weak = tray.as_weak();
     let state_for_toggle = Rc::clone(&state);
+    let config_for_toggle = Rc::clone(&config);
+    let saver_for_toggle = config_saver.clone();
     tray.on_toggle_requested(move || {
         let (Some(ui), Some(tray)) = (ui_weak.upgrade(), tray_weak.upgrade()) else {
             return;
         };
-        toggle_window(&ui, &tray, &state_for_toggle);
+        toggle_window(
+            &ui,
+            &tray,
+            &state_for_toggle,
+            &config_for_toggle,
+            &saver_for_toggle,
+        );
     });
 
     let ui_weak = ui.as_weak();
@@ -670,7 +693,7 @@ fn register_window_events(
                     return EventResult::Propagate;
                 };
 
-                if collapse_window(&ui, &tray, &state) {
+                if collapse_window(&ui, &tray, &state, &config, &config_saver) {
                     return EventResult::PreventDefault;
                 }
                 return EventResult::Propagate;
@@ -744,6 +767,74 @@ fn restore_saved_window_position_later(
     }
 }
 
+fn remember_collapsed_position(ui: &AppWindow, state: &RefCell<WindowState>) {
+    ui.window().with_winit_window(|window| {
+        let Ok(position) = window.outer_position() else {
+            return;
+        };
+        state
+            .borrow_mut()
+            .remember_collapsed_position(CorePhysicalPosition {
+                x: position.x,
+                y: position.y,
+            });
+    });
+}
+
+fn restore_collapsed_position_later(
+    ui: &AppWindow,
+    position: CorePhysicalPosition,
+    config: Rc<RefCell<AppConfig>>,
+    config_saver: ConfigSaveHandle,
+) {
+    for delay_ms in [50, 200] {
+        let ui_weak = ui.as_weak();
+        let config = Rc::clone(&config);
+        let config_saver = config_saver.clone();
+        slint::Timer::single_shot(Duration::from_millis(delay_ms), move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            ui.window().with_winit_window(|window| {
+                recover_and_store_window_position(
+                    window,
+                    position,
+                    &config,
+                    &config_saver,
+                    true,
+                    WindowMode::Collapsed,
+                );
+            });
+        });
+    }
+}
+
+fn show_native_window(ui: &AppWindow, focus: bool) {
+    apply_native_window_state(ui, focus);
+    for delay_ms in [50, 250] {
+        let ui_weak = ui.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(delay_ms), move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            apply_native_window_state(&ui, false);
+        });
+    }
+}
+
+fn apply_native_window_state(ui: &AppWindow, focus: bool) {
+    ui.window().with_winit_window(|window| {
+        window.set_visible(true);
+        window.set_skip_taskbar(true);
+        if let Err(error) = display::enforce_tool_window(window) {
+            eprintln!("failed to hide the assistant taskbar entry: {error}");
+        }
+        if focus {
+            window.focus_window();
+        }
+    });
+}
+
 fn recover_and_store_window_position(
     window: &winit::window::Window,
     requested_position: CorePhysicalPosition,
@@ -799,32 +890,65 @@ fn recover_and_store_window_position(
     position
 }
 
-fn toggle_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
+fn toggle_window(
+    ui: &AppWindow,
+    tray: &AssistantTray,
+    state: &RefCell<WindowState>,
+    config: &Rc<RefCell<AppConfig>>,
+    config_saver: &ConfigSaveHandle,
+) {
+    if state.borrow().phase() == ApplicationPhase::Expanded {
+        let _ = collapse_window(ui, tray, state, config, config_saver);
+        return;
+    }
+    if state.borrow().phase() != ApplicationPhase::Collapsed {
+        return;
+    }
+
+    remember_collapsed_position(ui, state);
     let mut state = state.borrow_mut();
     state.toggle();
-    ui.set_expanded(state.mode().is_expanded());
+    ui.set_expanded(true);
     sync_tray_state(tray, &state);
 }
 
-fn collapse_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) -> bool {
-    let mut state = state.borrow_mut();
-    if state.collapse().is_none() {
-        return false;
-    }
-
+fn collapse_window(
+    ui: &AppWindow,
+    tray: &AssistantTray,
+    state: &RefCell<WindowState>,
+    config: &Rc<RefCell<AppConfig>>,
+    config_saver: &ConfigSaveHandle,
+) -> bool {
+    let collapsed_position = {
+        let mut state = state.borrow_mut();
+        if state.collapse().is_none() {
+            return false;
+        }
+        let collapsed_position = state.take_collapsed_position();
+        sync_tray_state(tray, &state);
+        collapsed_position
+    };
     ui.set_expanded(false);
-    sync_tray_state(tray, &state);
+    if let Some(position) = collapsed_position {
+        restore_collapsed_position_later(ui, position, Rc::clone(config), config_saver.clone());
+    }
     true
 }
 
 fn hide_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
-    let mut state = state.borrow_mut();
-    if !state.hide() {
-        return;
+    {
+        let mut state = state.borrow_mut();
+        if !state.hide() {
+            return;
+        }
+        sync_tray_state(tray, &state);
     }
 
-    let _ = ui.hide();
-    sync_tray_state(tray, &state);
+    ui.window()
+        .with_winit_window(|window| window.set_visible(false));
+    if let Err(error) = ui.hide() {
+        eprintln!("failed to hide the assistant window: {error}");
+    }
 }
 
 fn restore_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
@@ -842,17 +966,17 @@ fn restore_window(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowSt
         eprintln!("failed to show the assistant window: {error}");
         return;
     }
-    ui.window()
-        .with_winit_window(|window| window.focus_window());
+    show_native_window(ui, true);
 }
 
 fn open_settings(ui: &AppWindow, tray: &AssistantTray, state: &RefCell<WindowState>) {
     restore_window(ui, tray, state);
 
-    let mut state = state.borrow_mut();
-    if state.phase() == ApplicationPhase::Collapsed {
-        state.toggle();
+    if state.borrow().phase() == ApplicationPhase::Collapsed {
+        remember_collapsed_position(ui, state);
+        state.borrow_mut().toggle();
     }
+    let state = state.borrow();
     if state.phase() != ApplicationPhase::Expanded {
         return;
     }
