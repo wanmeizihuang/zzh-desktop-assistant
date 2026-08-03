@@ -1,12 +1,10 @@
-# zzh-desktop-assistant
-轻量 Windows 桌面助手：动态桌面形象、CPU/GPU/内存/温度/网络监控，以及 OpenAI 兼容 API、本地模型和 Codex CLI 对话入口。
 # ZZH 桌面助手
 
 一款面向 Windows 10/11 的轻量桌面助手，将硬件监控、动态桌面形象和 AI 对话入口集中在一个可常驻的透明窗口中。
 
 > 当前项目处于早期开发阶段。公开版本仅支持 Windows x64，安装包尚未进行代码签名，Windows SmartScreen 可能显示安全提示。
 
-<img width="309" height="480" alt="image" src="https://github.com/user-attachments/assets/9383a444-bbe9-4737-9499-53b117c42082" />
+<img width="283" height="436" alt="image" src="https://github.com/user-attachments/assets/4c283a12-0b8b-4dab-b837-020896ae0951" />
 
 
 ## 功能
@@ -50,7 +48,7 @@
 %LOCALAPPDATA%\ZZH Desktop Assistant\settings.json
 ```
 
-配置文件不含 API Key。对话历史当前只保存在进程内存中，退出应用后不会保留。
+配置文件不含 API Key。首次升级时，如果新目录尚无配置，程序会从旧的 `%LOCALAPPDATA%\Xiaoxi Desktop Assistant\settings.json` 复制现有配置；旧文件会保留以便回滚。对话历史当前只保存在进程内存中，退出应用后不会保留。
 
 ## 从源码运行
 
