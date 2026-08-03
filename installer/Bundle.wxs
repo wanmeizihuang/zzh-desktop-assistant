@@ -1,0 +1,45 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Bundle Name="ZZH桌面助手"
+          Manufacturer="ZZH"
+          Version="0.1.2"
+          UpgradeCode="570F373E-E0B1-4BB5-A9A7-C58B177FBF6A"
+          IconSourceFile="$(var.AppIcon)">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                               LicenseUrl="" />
+    </BootstrapperApplication>
+
+    <util:RegistrySearch Id="PawnIOInstalled64Search"
+                         Variable="PawnIOInstalled64"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO"
+                         Value="DisplayVersion"
+                         Result="exists"
+                         Bitness="always64" />
+    <util:RegistrySearch Id="PawnIOInstalled32Search"
+                         Variable="PawnIOInstalled32"
+                         Root="HKLM"
+                         Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO"
+                         Value="DisplayVersion"
+                         Result="exists"
+                         Bitness="always32" />
+
+    <Chain>
+      <ExePackage Id="PawnIO"
+                  SourceFile="$(var.PawnIoSetup)"
+                  InstallArguments="-install -silent"
+                  RepairArguments="-install -silent"
+                  UninstallArguments="-uninstall -silent"
+                  DetectCondition="PawnIOInstalled64 OR PawnIOInstalled32"
+                  PerMachine="yes"
+                  Permanent="yes"
+                  Vital="yes" />
+      <MsiPackage Id="ZZHDesktopAssistant"
+                  SourceFile="$(var.MainMsi)"
+                  Visible="no"
+                  Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

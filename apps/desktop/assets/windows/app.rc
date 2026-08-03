@@ -1,0 +1,28 @@
+#pragma code_page(65001)
+
+1 ICON "zzh-assistant.ico"
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName", "ZZH\0"
+            VALUE "FileDescription", "ZZH桌面助手\0"
+            VALUE "FileVersion", "0.1.0\0"
+            VALUE "InternalName", "desktop-assistant\0"
+            VALUE "OriginalFilename", "desktop-assistant.exe\0"
+            VALUE "ProductName", "ZZH桌面助手\0"
+            VALUE "ProductVersion", "0.1.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END

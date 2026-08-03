@@ -8,7 +8,7 @@
 - 损坏配置保留与默认值恢复。
 - 300ms 防抖写入和退出前最后一次强制落盘。
 
-配置路径：`%LOCALAPPDATA%/Xiaoxi Desktop Assistant/settings.json`。
+配置路径：`%LOCALAPPDATA%/ZZH Desktop Assistant/settings.json`。
 
 ## 自动化结果
 

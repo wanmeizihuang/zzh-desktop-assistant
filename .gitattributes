@@ -1,0 +1,16 @@
+* text=auto
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.slint text eol=lf
+*.ps1 text eol=crlf
+*.wxs text eol=crlf
+*.cs text eol=crlf
+*.csproj text eol=crlf
+
+*.png binary
+*.ico binary
+*.exe binary

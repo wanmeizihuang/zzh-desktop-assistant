@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 agent-core.workspace = true
+serde_json.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -14,4 +15,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "agent-cli-fixture"
 path = "src/bin/agent-cli-fixture.rs"
-

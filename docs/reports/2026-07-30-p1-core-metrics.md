@@ -1,7 +1,7 @@
 # P1 核心指标验证报告
 
-日期：2026-07-30  
-平台：Windows 11 x64，144 DPI（150% 缩放）  
+日期：2026-07-30
+平台：Windows 11 x64，144 DPI（150% 缩放）
 数据源：`GetSystemTimes`、`GlobalMemoryStatusEx`、`GetIfTable2`、PDH、DXGI
 
 ## 已实现

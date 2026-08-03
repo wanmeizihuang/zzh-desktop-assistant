@@ -2,7 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a persistent, controllable Windows desktop shell around Xiaoxi with one lifecycle state shared by the window and tray.
+**Status:** Closed with documented follow-up validation (2026-07-31)
+
+**Goal:** Build a persistent, controllable Windows desktop shell around ZZH Desktop Assistant with one lifecycle state shared by the window and tray.
 
 **Architecture:** Keep lifecycle and behavior policy in `app-core`, with Slint as a view and `apps/desktop` as the Windows adapter. Persist only non-sensitive desktop settings and recover invalid/off-screen state before showing the window.
 
@@ -48,7 +50,7 @@
 
 1. Add tests for default config, JSON round-trip, corrupt-file preservation and atomic replacement.
 2. Implement versioned settings and a store whose path is injected by the caller.
-3. Resolve the production path under `%LOCALAPPDATA%/Xiaoxi Desktop Assistant`.
+3. Resolve the production path under `%LOCALAPPDATA%/ZZH Desktop Assistant`.
 4. Restore settings and a clamped position before normal use; persist setting and move changes.
 
 ### Task 4: Tray and single instance
@@ -62,7 +64,7 @@
 - Create: `apps/desktop/src/single_instance.rs`
 - Modify: `apps/desktop/src/main.rs`
 
-1. Add a tray icon derived from the approved Xiaoxi asset and implement the agreed menu.
+1. Add a tray icon derived from the approved ZZH mascot asset and implement the agreed menu.
 2. Route every tray action through the shared lifecycle/settings state.
 3. Add a current-user single-instance guard and wake-up channel.
 4. Verify show/hide, expand/collapse, settings, behavior toggles and exit from the tray.
@@ -71,7 +73,7 @@ Monitoring pause remains in P6 with alert and worker-control behavior; it is not
 
 ### Task 5: Startup and display recovery
 
-**Status:** Implemented; interactive multi-display/DPI verification pending (2026-07-30)
+**Status:** Complete with accepted follow-up validation (2026-07-31)
 
 **Files:**
 - Create: `apps/desktop/src/startup.rs`
@@ -83,11 +85,11 @@ Monitoring pause remains in P6 with alert and worker-control behavior; it is not
 3. Choose the nearest available work area when the saved monitor no longer exists.
 4. Verify on Windows 11 at 100%, 150% and a simulated removed secondary display.
 
-Implementation and automated verification are complete for the current-user Run value, Win32 work-area enumeration, nearest-screen selection, removed-monitor geometry and ACPI thermal-zone monitoring. The isolated HKCU write/read/delete test passes without administrator rights. The automated desktop session does not expose the Slint tool window as an interactive top-level window, so physical window placement across live monitor changes still requires a direct desktop check.
+Implementation and automated verification are complete for the current-user Run value, Win32 work-area enumeration, nearest-screen selection, removed-monitor geometry and ACPI thermal-zone monitoring. The isolated HKCU write/read/delete test passes without administrator rights. Physical placement across live multi-monitor and mixed-DPI changes remains a documented P6 compatibility-matrix check because the automated desktop session does not expose the Slint tool window as an interactive top-level window.
 
 ### Task 6: P2 quality gate
 
-**Status:** In progress (2026-07-30)
+**Status:** Complete with accepted follow-up items (2026-07-31)
 
 **Files:**
 - Modify: `README.md`
@@ -98,3 +100,5 @@ Implementation and automated verification are complete for the current-user Run 
 2. Perform the complete desktop-shell interaction checklist.
 3. Recheck collapsed idle CPU and working set against the P1 baseline.
 4. Record remaining limitations and update progress only for verified tasks.
+
+Formatting, workspace tests, strict Clippy and the Release build passed on 2026-07-31. The final report records the accepted multi-monitor validation and animated-mascot resource optimization follow-ups. See `docs/reports/2026-07-31-p2-desktop-shell-final.md`.

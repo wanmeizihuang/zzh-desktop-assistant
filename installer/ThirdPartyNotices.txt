@@ -1,0 +1,29 @@
+ZZH Desktop Assistant - Third-Party Notices
+============================================
+
+LibreHardwareMonitorLib 0.9.6
+Copyright (c) Libre Hardware Monitor contributors.
+License: Mozilla Public License 2.0 (MPL-2.0)
+License text: https://www.mozilla.org/MPL/2.0/
+Source code for the exact upstream release:
+https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/tree/v0.9.6
+
+ZZH Desktop Assistant uses the unmodified LibreHardwareMonitorLib binary as a
+separate managed assembly bundled into the self-contained sensor service. The
+source code of ZZH Desktop Assistant's own sensor service is included in the
+project under services/sensor-service.
+
+Intel Level Zero and NVIDIA NVML are loaded dynamically from installed hardware
+drivers when present; their driver binaries are not redistributed by this
+installer.
+
+PawnIO 2.2.0 official setup
+Copyright (c) PawnIO contributors.
+License: GNU General Public License 2.0 with the upstream exception notice.
+Project and corresponding source: https://github.com/namazso/PawnIO
+Official setup release: https://github.com/namazso/PawnIO.Setup/releases/tag/2.2.0
+
+The official, digitally signed PawnIO setup is redistributed unmodified and is
+installed as a separate shared driver. It is not removed when ZZH Desktop
+Assistant is uninstalled because other hardware-monitoring applications may use
+the same driver.

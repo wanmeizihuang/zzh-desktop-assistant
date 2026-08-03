@@ -1,4 +1,6 @@
+pub mod agent_profiles;
 pub mod config;
+pub mod credentials;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowMode {
@@ -216,8 +218,8 @@ fn u32_to_i32(value: u32) -> i32 {
 
 impl WindowMode {
     pub const COLLAPSED_LAYOUT: WindowLayout = WindowLayout {
-        width: 200,
-        height: 200,
+        width: 134,
+        height: 134,
     };
 
     pub const EXPANDED_LAYOUT: WindowLayout = WindowLayout {
@@ -417,8 +419,8 @@ mod tests {
         assert_eq!(
             layout,
             WindowLayout {
-                width: 200,
-                height: 200
+                width: 134,
+                height: 134
             }
         );
     }
@@ -688,13 +690,13 @@ mod tests {
             clamp_window_to_nearest_screen(
                 PhysicalPosition { x: -1800, y: 120 },
                 PhysicalSize {
-                    width: 200,
-                    height: 200,
+                    width: 134,
+                    height: 134,
                 },
                 &remaining,
                 32,
             ),
-            Some(PhysicalPosition { x: -168, y: 120 })
+            Some(PhysicalPosition { x: -102, y: 120 })
         );
     }
 
@@ -754,8 +756,8 @@ mod tests {
             clamp_window_for_mode(
                 edge_position,
                 PhysicalSize {
-                    width: 200,
-                    height: 200,
+                    width: 134,
+                    height: 134,
                 },
                 &work_area,
                 WindowMode::Collapsed,

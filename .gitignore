@@ -1,5 +1,11 @@
 /target/
 /backups/
+/installer/stage/
+/desktop-assistant.exe
+/ZZHDesktopAssistant-Setup.exe
+/SHA256SUMS.txt
+**/bin/
+**/obj/
 *.pdb
 *.ilk
 .idea/

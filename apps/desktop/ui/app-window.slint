@@ -1,3 +1,61 @@
+import { ListView } from "std-widgets.slint";
+
+export struct TrendSegment {
+    commands: string,
+    secondary: bool,
+}
+
+export struct ConversationRow {
+    kind: int,
+    author: string,
+    text: string,
+    pending: bool,
+    failed: bool,
+}
+
+export struct AgentChoice {
+    name: string,
+    status: string,
+    available: bool,
+}
+
+export struct ManagedAiRow {
+    name: string,
+    kind: string,
+    detail: string,
+    available: bool,
+}
+
+component TrendStrip inherits Rectangle {
+    in property <[TrendSegment]> segments;
+    in property <color> primary-color;
+    in property <color> secondary-color: transparent;
+
+    background: transparent;
+
+    Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: #dfe5ee;
+    }
+
+    for segment in root.segments: Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        fit: fill;
+        commands: segment.commands;
+        fill: transparent;
+        stroke: segment.secondary ? root.secondary-color : root.primary-color;
+        stroke-width: 1.5px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
 component MetricCard inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -11,7 +69,7 @@ component MetricCard inherits Rectangle {
 
     Rectangle {
         x: 12px;
-        y: 13px;
+        y: 8px;
         width: 7px;
         height: 7px;
         border-radius: 4px;
@@ -20,9 +78,9 @@ component MetricCard inherits Rectangle {
 
     Text {
         x: 27px;
-        y: 9px;
+        y: 4px;
         width: parent.width - 39px;
-        height: 18px;
+        height: 17px;
         text: root.label;
         color: #5a6577;
         font-size: 12px;
@@ -31,24 +89,24 @@ component MetricCard inherits Rectangle {
 
     Text {
         x: 12px;
-        y: 34px;
+        y: 21px;
         width: parent.width - 24px;
-        height: 29px;
+        height: 23px;
         text: root.value;
         color: #1c2433;
-        font-size: 21px;
+        font-size: 17px;
         font-weight: 700;
         vertical-alignment: center;
     }
 
     Text {
         x: 12px;
-        y: 69px;
+        y: 43px;
         width: parent.width - 24px;
-        height: 17px;
+        height: 14px;
         text: root.detail;
         color: #8b94a6;
-        font-size: 11px;
+        font-size: 10px;
         vertical-alignment: center;
     }
 }
@@ -106,6 +164,47 @@ component ToggleSwitch inherits Rectangle {
     }
 }
 
+component FormInput inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> value;
+    in property <bool> multiline: false;
+
+    background: transparent;
+
+    Text { x: 0; y: 0; width: parent.width; height: 16px; text: root.label; color: #5a6577; font-size: 10px; }
+    Rectangle {
+        x: 0; y: 18px; width: parent.width; height: parent.height - 18px;
+        background: #ffffff; border-color: field.has-focus ? #2f6bff88 : #141e3c20; border-width: 1px; border-radius: 6px;
+        field := TextInput {
+            x: 8px; y: 5px; width: parent.width - 16px; height: parent.height - 10px;
+            text <=> root.value;
+            single-line: !root.multiline;
+            wrap: root.multiline ? word-wrap : no-wrap;
+            color: #1c2433; font-size: 11px;
+        }
+        if field.text == "": Text {
+            x: 8px; y: 5px; width: parent.width - 16px; height: parent.height - 10px;
+            text: root.placeholder; color: #a1a9b6; font-size: 11px; vertical-alignment: center;
+        }
+    }
+}
+
+component AnimatedMascot inherits Image {
+    in property <image> sprite;
+    in property <int> frame-size;
+    in property <int> frame-column;
+    in property <int> frame-row;
+
+    source: root.sprite;
+    source-clip-x: root.frame-column * root.frame-size;
+    source-clip-y: root.frame-row * root.frame-size;
+    source-clip-width: root.frame-size;
+    source-clip-height: root.frame-size;
+    image-fit: contain;
+    accessible-role: none;
+}
+
 export component AssistantTray inherits SystemTrayIcon {
     in property <bool> window-visible: true;
     in property <bool> expanded: false;
@@ -121,8 +220,8 @@ export component AssistantTray inherits SystemTrayIcon {
     callback settings-requested;
     callback exit-requested;
 
-    icon: @image-url("../../../xiaoxi_full.png");
-    tooltip: "晓曦桌面助手";
+    icon: @image-url("../../../xingxiang/emerald_idle_frames/frame_0000.png");
+    tooltip: "ZZH桌面助手";
     clicked => { root.tray-clicked(); }
 
     Menu {
@@ -163,22 +262,67 @@ export component AssistantTray inherits SystemTrayIcon {
 
 export component AppWindow inherits Window {
     in-out property <bool> expanded: false;
+    in-out property <bool> window-visible: true;
+    in-out property <bool> repaint-cycle: false;
+    in-out property <int> mascot-id: 0;
+    in-out property <bool> mascot-animation-running: true;
+    property <image> emerald-mascot-sprite: @image-url("../../../xingxiang/emerald_idle_sprite.png");
+    property <image> orb-mascot-sprite: @image-url("../../../xingxiang/orb_idle_sprite.png");
+    property <image> mascot-sprite: root.mascot-id == 0 ? root.emerald-mascot-sprite : root.orb-mascot-sprite;
+    property <int> mascot-frame-size: root.mascot-id == 0 ? 128 : 192;
+    property <int> mascot-frame-column: 0;
+    property <int> mascot-frame-row: 0;
     in-out property <int> active-tab: 0;
     in-out property <bool> always-on-top-enabled: true;
     in-out property <bool> position-locked: false;
     in-out property <bool> startup-enabled: false;
+    in-out property <int> monitor-sample-interval: 0;
     in property <string> cpu-value: "采样中";
     in property <string> cpu-detail: "正在建立差分基线";
+    in property <string> cpu-temperature-value: "采样中";
+    in property <string> cpu-temperature-detail: "正在读取 CPU Package";
     in property <string> memory-value: "采样中";
     in property <string> memory-detail: "正在读取物理内存";
-    in property <string> network-value: "采样中";
-    in property <string> network-detail: "正在建立差分基线";
+    in property <string> network-received-value: "采样中";
+    in property <string> network-received-detail: "正在建立差分基线";
+    in property <string> network-transmitted-value: "采样中";
+    in property <string> network-transmitted-detail: "正在建立差分基线";
     in property <string> gpu-value: "采样中";
     in property <string> gpu-detail: "正在建立差分基线";
     in property <string> video-memory-value: "采样中";
     in property <string> video-memory-detail: "正在读取 GPU 内存";
     in property <string> temperature-value: "采样中";
-    in property <string> temperature-detail: "正在读取 ACPI 热区";
+    in property <string> temperature-detail: "正在识别目标显卡";
+    in property <[TrendSegment]> cpu-trend;
+    in property <[TrendSegment]> memory-trend;
+    in property <[TrendSegment]> network-received-trend;
+    in property <[TrendSegment]> network-transmitted-trend;
+    in property <[ConversationRow]> conversation-messages;
+    in property <[AgentChoice]> agent-choices;
+    in property <[ManagedAiRow]> managed-ai-models;
+    in-out property <int> selected-agent-index: 0;
+    in-out property <bool> agent-menu-open: false;
+    in property <string> selected-agent-name: "Codex CLI";
+    in property <string> selected-agent-status: "本地 CLI · 检测中";
+    in property <bool> selected-agent-available: false;
+    in property <bool> conversation-busy: false;
+    in property <bool> conversation-stopping: false;
+    in property <bool> conversation-can-retry: false;
+    in property <string> conversation-status: "暂无对话";
+    in-out property <bool> ai-manager-open: false;
+    in-out property <bool> ai-editor-open: false;
+    in-out property <bool> ai-delete-confirm-open: false;
+    in-out property <int> ai-editor-index: -1;
+    in-out property <int> ai-editor-kind: 0;
+    in-out property <string> ai-editor-name: "";
+    in-out property <string> ai-editor-endpoint: "";
+    in-out property <string> ai-editor-model: "";
+    in-out property <string> ai-editor-executable: "";
+    in-out property <string> ai-editor-arguments: "";
+    in-out property <string> ai-editor-api-key: "";
+    in-out property <bool> ai-editor-has-api-key: false;
+    in-out property <bool> ai-editor-clear-api-key: false;
+    in-out property <string> ai-management-message: "";
     callback toggle-requested;
     callback mascot-clicked;
     callback drag-pointer-pressed(length, length);
@@ -186,27 +330,58 @@ export component AppWindow inherits Window {
     callback always-on-top-toggle-requested;
     callback position-lock-toggle-requested;
     callback startup-toggle-requested;
+    callback mascot-selection-requested(int);
+    callback monitor-sample-interval-selection-requested(int);
     callback wake-requested;
+    callback monitor-activity-changed(bool, bool, int);
+    callback agent-selection-requested(int);
+    callback agent-send-requested(string) -> bool;
+    callback agent-stop-requested;
+    callback agent-retry-requested;
+    callback ai-manager-open-requested;
+    callback ai-manager-close-requested;
+    callback ai-model-new-requested;
+    callback ai-model-edit-requested(int);
+    callback ai-model-check-requested(int, int, string, string, string, string, string) -> string;
+    callback ai-model-save-requested(int, int, string, string, string, string, string, string, bool) -> bool;
+    callback ai-model-delete-requested(int);
+    callback ai-model-delete-confirmed(int) -> bool;
 
-    width: root.expanded ? 412px : 200px;
-    height: root.expanded ? 640px : 200px;
+    Timer {
+        interval: root.expanded ? 200ms : 100ms;
+        running: root.mascot-animation-running && root.window-visible;
+        triggered => {
+            if root.mascot-frame-column < 9 {
+                root.mascot-frame-column += 1;
+            } else {
+                root.mascot-frame-column = 0;
+                root.mascot-frame-row = root.mascot-frame-row < 8 ? root.mascot-frame-row + 1 : 0;
+            }
+        }
+    }
+
+    width: root.expanded ? 412px : 134px;
+    height: root.expanded ? 640px : 134px;
     background: transparent;
     no-frame: true;
     always-on-top: root.always-on-top-enabled;
-    title: "晓曦桌面助手";
+    title: "ZZH桌面助手";
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 13px;
 
     if !root.expanded: Rectangle {
         background: transparent;
+        opacity: root.repaint-cycle ? 1.0 : 0.999999;
 
-        Image {
-            x: 4px;
-            y: 4px;
-            width: 192px;
-            height: 192px;
-            source: @image-url("../../../xiaoxi_full.png");
-            image-fit: contain;
+        AnimatedMascot {
+            x: 3px;
+            y: 3px;
+            width: 128px;
+            height: 128px;
+            sprite: root.mascot-sprite;
+            frame-size: root.mascot-frame-size;
+            frame-column: root.mascot-frame-column;
+            frame-row: root.mascot-frame-row;
         }
 
         mascot-touch := TouchArea {
@@ -231,6 +406,7 @@ export component AppWindow inherits Window {
         y: 8px;
         width: 396px;
         height: 624px;
+        opacity: root.repaint-cycle ? 1.0 : 0.999999;
         background: #f8fafd;
         border-color: #141e3c14;
         border-width: 1px;
@@ -239,13 +415,15 @@ export component AppWindow inherits Window {
         drop-shadow-blur: 18px;
         drop-shadow-offset-y: 6px;
 
-        Image {
+        AnimatedMascot {
             x: 16px;
             y: 12px;
             width: 42px;
             height: 42px;
-            source: @image-url("../../../xiaoxi_full.png");
-            image-fit: contain;
+            sprite: root.mascot-sprite;
+            frame-size: root.mascot-frame-size;
+            frame-column: root.mascot-frame-column;
+            frame-row: root.mascot-frame-row;
         }
 
         Text {
@@ -253,7 +431,7 @@ export component AppWindow inherits Window {
             y: 12px;
             width: 220px;
             height: 23px;
-            text: "晓曦";
+            text: "ZZH";
             color: #1c2433;
             font-size: 16px;
             font-weight: 700;
@@ -328,7 +506,10 @@ export component AppWindow inherits Window {
                 height: 34px;
                 label: "监控";
                 selected: root.active-tab == 0;
-                clicked => { root.active-tab = 0; }
+                clicked => {
+                    root.active-tab = 0;
+                    root.monitor-activity-changed(root.window-visible, root.expanded, root.active-tab);
+                }
             }
 
             TabButton {
@@ -338,7 +519,10 @@ export component AppWindow inherits Window {
                 height: 34px;
                 label: "对话";
                 selected: root.active-tab == 1;
-                clicked => { root.active-tab = 1; }
+                clicked => {
+                    root.active-tab = 1;
+                    root.monitor-activity-changed(root.window-visible, root.expanded, root.active-tab);
+                }
             }
 
             TabButton {
@@ -348,7 +532,10 @@ export component AppWindow inherits Window {
                 height: 34px;
                 label: "设置";
                 selected: root.active-tab == 2;
-                clicked => { root.active-tab = 2; }
+                clicked => {
+                    root.active-tab = 2;
+                    root.monitor-activity-changed(root.window-visible, root.expanded, root.active-tab);
+                }
             }
         }
 
@@ -375,28 +562,44 @@ export component AppWindow inherits Window {
                 y: 23px;
                 width: parent.width;
                 height: 18px;
-                text: "CPU / 内存 / GPU / 显存 / 温度 / 网络每 2 秒刷新";
+                text: "8 项设备指标每 " + (root.monitor-sample-interval == 0 ? "2" : root.monitor-sample-interval == 1 ? "5" : "10") + " 秒刷新";
                 color: #8b94a6;
                 font-size: 11px;
             }
 
-            MetricCard { x: 0; y: 53px; width: 176px; height: 100px; label: "CPU"; value: root.cpu-value; detail: root.cpu-detail; accent: #2f6bff; }
-            MetricCard { x: 188px; y: 53px; width: 176px; height: 100px; label: "内存"; value: root.memory-value; detail: root.memory-detail; accent: #28c9d8; }
-            MetricCard { x: 0; y: 165px; width: 176px; height: 100px; label: "GPU"; value: root.gpu-value; detail: root.gpu-detail; accent: #f2a0c2; }
-            MetricCard { x: 188px; y: 165px; width: 176px; height: 100px; label: "显存"; value: root.video-memory-value; detail: root.video-memory-detail; accent: #2f6bff; }
-            MetricCard { x: 0; y: 277px; width: 176px; height: 100px; label: "温度"; value: root.temperature-value; detail: root.temperature-detail; accent: #e0a32e; }
-            MetricCard { x: 188px; y: 277px; width: 176px; height: 100px; label: "网络"; value: root.network-value; detail: root.network-detail; accent: #28a96b; }
+            MetricCard { x: 0; y: 50px; width: 176px; height: 61px; label: "CPU"; value: root.cpu-value; detail: root.cpu-detail; accent: #2f6bff; }
+            MetricCard { x: 188px; y: 50px; width: 176px; height: 61px; label: "CPU 温度"; value: root.cpu-temperature-value; detail: root.cpu-temperature-detail; accent: #e0a32e; }
+            MetricCard { x: 0; y: 118px; width: 176px; height: 61px; label: "内存"; value: root.memory-value; detail: root.memory-detail; accent: #28c9d8; }
+            MetricCard { x: 188px; y: 118px; width: 176px; height: 61px; label: "显存"; value: root.video-memory-value; detail: root.video-memory-detail; accent: #2f6bff; }
+            MetricCard { x: 0; y: 186px; width: 176px; height: 61px; label: "GPU"; value: root.gpu-value; detail: root.gpu-detail; accent: #f2a0c2; }
+            MetricCard { x: 188px; y: 186px; width: 176px; height: 61px; label: "GPU 温度"; value: root.temperature-value; detail: root.temperature-detail; accent: #e0a32e; }
+            MetricCard { x: 0; y: 254px; width: 176px; height: 61px; label: "↓ 下行"; value: root.network-received-value; detail: root.network-received-detail; accent: #2f6bff; }
+            MetricCard { x: 188px; y: 254px; width: 176px; height: 61px; label: "↑ 上行"; value: root.network-transmitted-value; detail: root.network-transmitted-detail; accent: #e04b59; }
 
             Rectangle {
                 x: 0;
-                y: 393px;
+                y: 323px;
                 width: parent.width;
-                height: 67px;
-                background: #eaf1ff;
+                height: 141px;
+                background: #ffffffdc;
+                border-color: #141e3c12;
+                border-width: 1px;
                 border-radius: 8px;
 
-                Text { x: 12px; y: 10px; width: parent.width - 24px; height: 20px; text: "核心监控已连接"; color: #1f53d6; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 34px; width: parent.width - 24px; height: 18px; text: "温度显示当前最高 ACPI 热区"; color: #5a6577; font-size: 11px; }
+                Text { x: 12px; y: 7px; width: 120px; height: 18px; text: "最近 5 分钟"; color: #1c2433; font-size: 12px; font-weight: 700; }
+                Text { x: parent.width - 120px; y: 7px; width: 108px; height: 18px; text: "缺失区间留空"; color: #8b94a6; font-size: 10px; horizontal-alignment: right; }
+
+                Text { x: 12px; y: 30px; width: 42px; height: 20px; text: "CPU"; color: #2f6bff; font-size: 10px; vertical-alignment: center; }
+                TrendStrip { x: 58px; y: 31px; width: parent.width - 70px; height: 18px; segments: root.cpu-trend; primary-color: #2f6bff; }
+
+                Text { x: 12px; y: 56px; width: 42px; height: 20px; text: "内存"; color: #28a6b8; font-size: 10px; vertical-alignment: center; }
+                TrendStrip { x: 58px; y: 57px; width: parent.width - 70px; height: 18px; segments: root.memory-trend; primary-color: #28a6b8; }
+
+                Text { x: 12px; y: 82px; width: 42px; height: 20px; text: "↓ 下行"; color: #2f6bff; font-size: 10px; vertical-alignment: center; }
+                TrendStrip { x: 58px; y: 83px; width: parent.width - 70px; height: 18px; segments: root.network-received-trend; primary-color: #2f6bff; }
+
+                Text { x: 12px; y: 108px; width: 42px; height: 20px; text: "↑ 上行"; color: #e04b59; font-size: 10px; vertical-alignment: center; }
+                TrendStrip { x: 58px; y: 109px; width: parent.width - 70px; height: 18px; segments: root.network-transmitted-trend; primary-color: #e04b59; }
             }
         }
 
@@ -407,40 +610,120 @@ export component AppWindow inherits Window {
             height: 484px;
             background: transparent;
 
-            Rectangle {
+            agent-selector := Rectangle {
                 x: 0;
                 y: 0;
                 width: parent.width;
                 height: 52px;
-                background: #ffffffdc;
-                border-color: #141e3c12;
+                background: selector-touch.has-hover && !root.conversation-busy ? #ffffff : #ffffffdc;
+                border-color: root.agent-menu-open ? #2f6bff66 : #141e3c12;
                 border-width: 1px;
                 border-radius: 8px;
-                Text { x: 12px; y: 8px; width: 240px; height: 20px; text: "Codex"; color: #1c2433; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 29px; width: 240px; height: 16px; text: "本地 CLI · 已连接"; color: #28a96b; font-size: 11px; }
-                Text { x: parent.width - 34px; y: 14px; width: 22px; height: 22px; text: "⌄"; color: #5a6577; font-size: 18px; horizontal-alignment: center; }
+                Rectangle { x: 12px; y: 13px; width: 8px; height: 8px; border-radius: 4px; background: root.selected-agent-available ? #28a96b : #e04b59; }
+                Text { x: 28px; y: 6px; width: 280px; height: 21px; text: root.selected-agent-name; color: #1c2433; font-size: 13px; font-weight: 700; vertical-alignment: center; }
+                Text { x: 28px; y: 28px; width: 280px; height: 17px; text: root.selected-agent-status; color: root.selected-agent-available ? #28a96b : #e04b59; font-size: 11px; vertical-alignment: center; }
+                Text { x: parent.width - 34px; y: 14px; width: 22px; height: 22px; text: root.agent-menu-open ? "⌃" : "⌄"; color: root.conversation-busy ? #b7bfcb : #5a6577; font-size: 18px; horizontal-alignment: center; }
+                selector-touch := TouchArea {
+                    enabled: !root.conversation-busy;
+                    accessible-role: button;
+                    accessible-label: "选择模型";
+                    clicked => { root.agent-menu-open = !root.agent-menu-open; }
+                }
             }
 
-            Text {
+            if root.conversation-messages.length == 0: Text {
                 x: 24px;
-                y: 176px;
+                y: 174px;
                 width: parent.width - 48px;
-                height: 50px;
-                text: "选择智能体后，在这里直接开始对话";
+                height: 30px;
+                text: "暂无对话";
                 color: #8b94a6;
                 font-size: 12px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                wrap: word-wrap;
+            }
+
+            message-list := ListView {
+                x: 0;
+                y: 60px;
+                width: parent.width;
+                height: 290px;
+
+                for message in root.conversation-messages: Rectangle {
+                    width: message-list.visible-width;
+                    height: Math.max(50px, message-body.preferred-height + 30px);
+                    background: transparent;
+
+                    bubble := Rectangle {
+                        x: message.kind == 0 ? 54px : 0px;
+                        y: 3px;
+                        width: message.kind == 0 ? parent.width - 54px : parent.width - 24px;
+                        height: parent.height - 6px;
+                        background: message.kind == 0 ? #eaf1ff : message.failed ? #fff1f2 : #ffffffdc;
+                        border-color: message.failed ? #e04b5955 : #141e3c12;
+                        border-width: 1px;
+                        border-radius: 8px;
+
+                        Text {
+                            x: 10px;
+                            y: 5px;
+                            width: parent.width - 20px;
+                            height: 14px;
+                            text: message.author;
+                            color: message.failed ? #e04b59 : message.kind == 0 ? #2f6bff : #5a6577;
+                            font-size: 10px;
+                            font-weight: 700;
+                        }
+
+                        message-body := Text {
+                            x: 10px;
+                            y: 20px;
+                            width: parent.width - 20px;
+                            height: self.preferred-height;
+                            text: message.text == "" && message.pending ? "…" : message.text;
+                            color: #1c2433;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            vertical-alignment: top;
+                        }
+                    }
+                }
+            }
+
+            Text {
+                x: 4px;
+                y: 357px;
+                width: parent.width - 42px;
+                height: 22px;
+                text: root.conversation-status;
+                color: root.conversation-can-retry ? #e04b59 : #8b94a6;
+                font-size: 10px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if root.conversation-can-retry: Rectangle {
+                x: parent.width - 32px;
+                y: 356px;
+                width: 28px;
+                height: 24px;
+                border-radius: 8px;
+                background: retry-touch.has-hover ? #eaf1ff : transparent;
+                Text { text: "↻"; color: #2f6bff; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                retry-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "重试";
+                    clicked => { root.agent-retry-requested(); }
+                }
             }
 
             Rectangle {
                 x: 0;
-                y: 390px;
+                y: 388px;
                 width: parent.width;
-                height: 94px;
+                height: 96px;
                 background: #ffffff;
-                border-color: #2f6bff40;
+                border-color: prompt.has-focus ? #2f6bff88 : #2f6bff40;
                 border-width: 1px;
                 border-radius: 8px;
 
@@ -452,6 +735,13 @@ export component AppWindow inherits Window {
                     color: #1c2433;
                     font-size: 13px;
                     wrap: word-wrap;
+                    single-line: true;
+                    enabled: root.selected-agent-available && !root.conversation-busy;
+                    accepted => {
+                        if root.selected-agent-available && !root.conversation-busy && root.agent-send-requested(self.text) {
+                            self.text = "";
+                        }
+                    }
                 }
 
                 if prompt.text == "": Text {
@@ -459,21 +749,73 @@ export component AppWindow inherits Window {
                     y: 10px;
                     width: parent.width - 24px;
                     height: 42px;
-                    text: "给晓曦一个任务...";
+                    text: "给 ZZH 一个任务...";
                     color: #8b94a6;
                     font-size: 13px;
                     vertical-alignment: top;
                 }
 
-                Text { x: 12px; y: 62px; width: 28px; height: 24px; text: "+"; color: #5a6577; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
-                Rectangle {
+                Text { x: 12px; y: 62px; width: 28px; height: 24px; text: "+"; color: #c1c8d3; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                send-stop := Rectangle {
                     x: parent.width - 44px;
                     y: 58px;
                     width: 32px;
                     height: 28px;
-                    background: #2f6bff;
+                    background: root.conversation-busy ? #e04b59 : root.selected-agent-available && prompt.text != "" ? #2f6bff : #c8cfda;
                     border-radius: 8px;
-                    Text { text: "↑"; color: white; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: root.conversation-busy ? "■" : "↑"; color: white; font-size: root.conversation-busy ? 13px : 18px; horizontal-alignment: center; vertical-alignment: center; }
+                    send-touch := TouchArea {
+                        enabled: root.conversation-busy || (root.selected-agent-available && prompt.text != "");
+                        accessible-role: button;
+                        accessible-label: root.conversation-busy ? "停止" : "发送";
+                        clicked => {
+                            if root.conversation-busy {
+                                root.agent-stop-requested();
+                            } else if root.agent-send-requested(prompt.text) {
+                                prompt.text = "";
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.agent-menu-open: Rectangle {
+                x: 0;
+                y: 54px;
+                width: parent.width;
+                height: Math.min(root.agent-choices.length * 42px, 168px);
+                background: #ffffff;
+                border-color: #2f6bff55;
+                border-width: 1px;
+                border-radius: 8px;
+                clip: true;
+                z: 20;
+                drop-shadow-color: #182a5a24;
+                drop-shadow-blur: 10px;
+                drop-shadow-offset-y: 3px;
+
+                menu-list := ListView {
+                    x: 1px;
+                    y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
+
+                    for choice[index] in root.agent-choices: Rectangle {
+                        width: menu-list.visible-width;
+                        height: 42px;
+                        background: index == root.selected-agent-index ? #eaf1ff : choice-touch.has-hover ? #f5f7fb : transparent;
+                        Rectangle { x: 10px; y: 15px; width: 7px; height: 7px; border-radius: 4px; background: choice.available ? #28a96b : #e04b59; }
+                        Text { x: 26px; y: 4px; width: 180px; height: 18px; text: choice.name; color: #1c2433; font-size: 12px; font-weight: 700; }
+                        Text { x: 26px; y: 22px; width: parent.width - 38px; height: 15px; text: choice.status; color: choice.available ? #5a6577 : #e04b59; font-size: 10px; overflow: elide; }
+                        choice-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: choice.name;
+                            clicked => {
+                                root.agent-selection-requested(index);
+                                root.agent-menu-open = false;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -485,55 +827,237 @@ export component AppWindow inherits Window {
             height: 484px;
             background: transparent;
 
-            Text { x: 0; y: 0; width: parent.width; height: 24px; text: "桌面行为"; color: #1c2433; font-size: 14px; font-weight: 700; }
+            Text { x: 0; y: 0; width: parent.width; height: 24px; text: "助手形象"; color: #1c2433; font-size: 14px; font-weight: 700; }
 
             Rectangle {
-                x: 0; y: 36px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
-                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "始终置顶"; color: #1c2433; font-size: 13px; font-weight: 600; }
-                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "让晓曦保持在其他窗口上方"; color: #8b94a6; font-size: 11px; }
+                x: 0; y: 32px; width: 178px; height: 76px; background: root.mascot-id == 0 ? #eef4ff : #ffffffdc; border-color: root.mascot-id == 0 ? #2f6bff : #141e3c12; border-width: 1px; border-radius: 8px;
+                AnimatedMascot {
+                    x: 8px; y: 11px; width: 54px; height: 54px;
+                    sprite: root.emerald-mascot-sprite;
+                    frame-size: 128;
+                    frame-column: 0;
+                    frame-row: 0;
+                }
+                Text { x: 68px; y: 14px; width: 80px; height: 20px; text: "翡翠光球"; color: #1c2433; font-size: 13px; font-weight: 700; }
+                Text { x: 68px; y: 38px; width: 80px; height: 18px; text: "默认形象"; color: #5a6577; font-size: 11px; }
+                if root.mascot-id == 0: Rectangle { x: parent.width - 26px; y: 29px; width: 18px; height: 18px; border-radius: 9px; background: #2f6bff;
+                    Rectangle { x: 5px; y: 5px; width: 8px; height: 8px; border-radius: 4px; background: white; }
+                }
+                TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; clicked => { root.mascot-selection-requested(0); } }
+            }
+
+            Rectangle {
+                x: 186px; y: 32px; width: 178px; height: 76px; background: root.mascot-id == 1 ? #eef4ff : #ffffffdc; border-color: root.mascot-id == 1 ? #2f6bff : #141e3c12; border-width: 1px; border-radius: 8px;
+                AnimatedMascot { x: 8px; y: 11px; width: 54px; height: 54px; sprite: root.orb-mascot-sprite; frame-size: 192; frame-column: 0; frame-row: 0; }
+                Text { x: 68px; y: 14px; width: 80px; height: 20px; text: "动态光球"; color: #1c2433; font-size: 13px; font-weight: 700; }
+                Text { x: 68px; y: 38px; width: 80px; height: 18px; text: "备选形象"; color: #5a6577; font-size: 11px; }
+                if root.mascot-id == 1: Rectangle { x: parent.width - 26px; y: 29px; width: 18px; height: 18px; border-radius: 9px; background: #2f6bff;
+                    Rectangle { x: 5px; y: 5px; width: 8px; height: 8px; border-radius: 4px; background: white; }
+                }
+                TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; clicked => { root.mascot-selection-requested(1); } }
+            }
+
+            Rectangle {
+                x: 0; y: 122px; width: parent.width; height: 56px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 7px; width: 250px; height: 20px; text: "AI 管理"; color: #1c2433; font-size: 13px; font-weight: 700; }
+                Text { x: 12px; y: 28px; width: 290px; height: 17px; text: root.managed-ai-models.length + " 个模型 · 云端、本地服务或 Codex CLI"; color: #8b94a6; font-size: 11px; }
+                Text { x: parent.width - 34px; y: 15px; width: 22px; height: 24px; text: "›"; color: #2f6bff; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { accessible-role: button; accessible-label: "打开 AI 管理"; clicked => { root.ai-manager-open-requested(); } }
+            }
+
+            Text { x: 0; y: 190px; width: parent.width; height: 24px; text: "桌面行为"; color: #1c2433; font-size: 14px; font-weight: 700; }
+
+            Rectangle {
+                x: 0; y: 218px; width: parent.width; height: 52px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 7px; width: 250px; height: 20px; text: "始终置顶"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 28px; width: 250px; height: 17px; text: "让 ZZH 保持在其他窗口上方"; color: #8b94a6; font-size: 11px; }
                 ToggleSwitch {
                     x: parent.width - 50px;
-                    y: 20px;
+                    y: 14px;
                     checked: root.always-on-top-enabled;
                     toggled => { root.always-on-top-toggle-requested(); }
                 }
             }
 
             Rectangle {
-                x: 0; y: 112px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
-                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "锁定位置"; color: #1c2433; font-size: 13px; font-weight: 600; }
-                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "防止工作时误拖动助手"; color: #8b94a6; font-size: 11px; }
+                x: 0; y: 278px; width: parent.width; height: 52px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 7px; width: 250px; height: 20px; text: "锁定位置"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 28px; width: 250px; height: 17px; text: "防止工作时误拖动助手"; color: #8b94a6; font-size: 11px; }
                 ToggleSwitch {
                     x: parent.width - 50px;
-                    y: 20px;
+                    y: 14px;
                     checked: root.position-locked;
                     toggled => { root.position-lock-toggle-requested(); }
                 }
             }
 
             Rectangle {
-                x: 0; y: 188px; width: parent.width; height: 64px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
-                Text { x: 12px; y: 10px; width: 250px; height: 20px; text: "开机启动"; color: #1c2433; font-size: 13px; font-weight: 600; }
-                Text { x: 12px; y: 32px; width: 250px; height: 17px; text: "登录 Windows 后自动启动晓曦"; color: #8b94a6; font-size: 11px; }
+                x: 0; y: 338px; width: parent.width; height: 52px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 7px; width: 250px; height: 20px; text: "开机启动"; color: #1c2433; font-size: 13px; font-weight: 600; }
+                Text { x: 12px; y: 28px; width: 250px; height: 17px; text: "登录 Windows 后自动启动 ZZH"; color: #8b94a6; font-size: 11px; }
                 ToggleSwitch {
                     x: parent.width - 50px;
-                    y: 20px;
+                    y: 14px;
                     checked: root.startup-enabled;
                     toggled => { root.startup-toggle-requested(); }
                 }
             }
 
-            Text { x: 0; y: 280px; width: parent.width; height: 24px; text: "采样频率"; color: #1c2433; font-size: 14px; font-weight: 700; }
             Rectangle {
-                x: 0; y: 316px; width: parent.width; height: 48px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
-                Text { x: 12px; y: 14px; width: 220px; height: 20px; text: "展开时刷新间隔"; color: #5a6577; font-size: 12px; }
-                Text { x: parent.width - 80px; y: 14px; width: 56px; height: 20px; text: "2 秒"; color: #2f6bff; font-size: 12px; font-weight: 700; horizontal-alignment: right; }
-            }
+                x: 0; y: 400px; width: parent.width; height: 48px; background: #ffffffdc; border-color: #141e3c12; border-width: 1px; border-radius: 8px;
+                Text { x: 12px; y: 14px; width: 170px; height: 20px; text: "展开时刷新间隔"; color: #5a6577; font-size: 12px; }
+                Rectangle {
+                    x: parent.width - 174px;
+                    y: 8px;
+                    width: 162px;
+                    height: 32px;
+                    background: #f0f3f8;
+                    border-color: #141e3c12;
+                    border-width: 1px;
+                    border-radius: 6px;
 
-            Rectangle {
-                x: 0; y: 392px; width: parent.width; height: 76px; background: #eaf1ff; border-radius: 8px;
-                Text { x: 12px; y: 11px; width: parent.width - 24px; height: 20px; text: "技术验证版本"; color: #1f53d6; font-size: 13px; font-weight: 700; }
-                Text { x: 12px; y: 35px; width: parent.width - 24px; height: 30px; text: "桌面行为会自动保存并在下次启动恢复。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
+                    for label[index] in ["2 秒", "5 秒", "10 秒"]: Rectangle {
+                        x: index * 54px;
+                        y: 0;
+                        width: 54px;
+                        height: 32px;
+                        background: root.monitor-sample-interval == index ? #2f6bff : transparent;
+                        border-radius: 6px;
+                        Text {
+                            text: label;
+                            color: root.monitor-sample-interval == index ? white : #5a6577;
+                            font-size: 11px;
+                            font-weight: root.monitor-sample-interval == index ? 700 : 500;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.monitor-sample-interval-selection-requested(index); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.ai-manager-open: Rectangle {
+            x: 0; y: 0; width: parent.width; height: parent.height; background: #16233a66; z: 100;
+
+            manager-panel := Rectangle {
+                x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px;
+                background: #f8fafd; border-color: #141e3c24; border-width: 1px; border-radius: 8px;
+
+                Text { x: 16px; y: 12px; width: 250px; height: 28px; text: root.ai-editor-open ? (root.ai-editor-index < 0 ? "添加模型" : "编辑模型") : "AI 管理"; color: #1c2433; font-size: 16px; font-weight: 700; vertical-alignment: center; }
+                Rectangle {
+                    x: parent.width - 44px; y: 10px; width: 32px; height: 32px; background: manager-close.has-hover ? #eef2f8 : transparent; border-radius: 8px;
+                    Text { text: "×"; color: #5a6577; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                    manager-close := TouchArea { accessible-role: button; accessible-label: "关闭 AI 管理"; clicked => { root.ai-manager-close-requested(); } }
+                }
+
+                if !root.ai-editor-open: Rectangle {
+                    x: 16px; y: 52px; width: parent.width - 32px; height: parent.height - 68px; background: transparent;
+                    if root.conversation-busy: Text { x: 0; y: 0; width: parent.width - 104px; height: 34px; text: "回答进行中，当前为只读"; color: #e0a32e; font-size: 11px; vertical-alignment: center; }
+                    Rectangle {
+                        x: parent.width - 96px; y: 0; width: 96px; height: 34px; background: root.conversation-busy ? #c8cfda : add-touch.has-hover ? #245fe6 : #2f6bff; border-radius: 7px;
+                        Text { text: "+  添加模型"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        add-touch := TouchArea { enabled: !root.conversation-busy; accessible-role: button; accessible-label: "添加模型"; clicked => { root.ai-model-new-requested(); } }
+                    }
+                    if root.managed-ai-models.length == 0: Text { x: 20px; y: 180px; width: parent.width - 40px; height: 48px; text: "尚未添加模型"; color: #8b94a6; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    model-list := ListView {
+                        x: 0; y: 46px; width: parent.width; height: parent.height - 46px;
+                        for model[index] in root.managed-ai-models: Rectangle {
+                            width: model-list.visible-width; height: 68px; background: row-touch.has-hover ? #f0f4fa : transparent;
+                            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: #dde3ec; }
+                            Rectangle { x: 4px; y: 15px; width: 8px; height: 8px; border-radius: 4px; background: model.available ? #28a96b : #e04b59; }
+                            Text { x: 22px; y: 7px; width: parent.width - 112px; height: 20px; text: model.name; color: #1c2433; font-size: 12px; font-weight: 700; overflow: elide; }
+                            Text { x: 22px; y: 28px; width: parent.width - 112px; height: 16px; text: model.kind; color: #5a6577; font-size: 10px; overflow: elide; }
+                            Text { x: 22px; y: 45px; width: parent.width - 112px; height: 15px; text: model.detail; color: model.available ? #8b94a6 : #e04b59; font-size: 9px; overflow: elide; }
+                            row-touch := TouchArea { enabled: !root.conversation-busy; accessible-role: button; accessible-label: "编辑 " + model.name; clicked => { root.ai-model-edit-requested(index); } }
+                            Rectangle {
+                                x: parent.width - 80px; y: 18px; width: 32px; height: 30px; background: edit-touch.has-hover ? #eaf1ff : transparent; border-radius: 6px; z: 2;
+                                Text { text: "编辑"; color: root.conversation-busy ? #b7bfcb : #2f6bff; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                                edit-touch := TouchArea { enabled: !root.conversation-busy; accessible-role: button; accessible-label: "编辑 " + model.name; clicked => { root.ai-model-edit-requested(index); } }
+                            }
+                            Rectangle {
+                                x: parent.width - 40px; y: 18px; width: 32px; height: 30px; background: delete-touch.has-hover ? #fff1f2 : transparent; border-radius: 6px; z: 2;
+                                Text { text: "删除"; color: root.conversation-busy ? #b7bfcb : #e04b59; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                                delete-touch := TouchArea { enabled: !root.conversation-busy; accessible-role: button; accessible-label: "删除 " + model.name; clicked => { root.ai-model-delete-requested(index); } }
+                            }
+                        }
+                    }
+                }
+
+                if root.ai-editor-open: Rectangle {
+                    x: 16px; y: 52px; width: parent.width - 32px; height: parent.height - 68px; background: transparent;
+                    Text { x: 0; y: 0; width: parent.width; height: 16px; text: "类型"; color: #5a6577; font-size: 10px; }
+                    Rectangle {
+                        x: 0; y: 18px; width: parent.width; height: 34px; background: #edf1f6; border-radius: 6px;
+                        for label[index] in ["云端 API", "本地服务", "Codex CLI"]: Rectangle {
+                            x: index * parent.width / 3; y: 0; width: parent.width / 3; height: parent.height; background: root.ai-editor-kind == index ? #2f6bff : transparent; border-radius: 6px;
+                            Text { text: label; color: root.ai-editor-kind == index ? white : #5a6577; font-size: 10px; font-weight: root.ai-editor-kind == index ? 700 : 500; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { enabled: root.ai-editor-index < 0; clicked => { root.ai-editor-kind = index; root.ai-management-message = ""; } }
+                        }
+                    }
+                    FormInput { x: 0; y: 62px; width: parent.width; height: 54px; label: "模型名称"; placeholder: "例如：本地千问"; value <=> root.ai-editor-name; }
+                    if root.ai-editor-kind < 2: FormInput { x: 0; y: 122px; width: parent.width; height: 54px; label: "接口地址"; placeholder: root.ai-editor-kind == 1 ? "http://127.0.0.1:11434/v1/chat/completions" : "https://api.example.com/v1/chat/completions"; value <=> root.ai-editor-endpoint; }
+                    if root.ai-editor-kind < 2: FormInput { x: 0; y: 182px; width: parent.width; height: 54px; label: "模型 ID"; placeholder: "服务端使用的模型名称"; value <=> root.ai-editor-model; }
+                    if root.ai-editor-kind == 2: FormInput { x: 0; y: 122px; width: parent.width; height: 54px; label: "可执行文件"; placeholder: "codex.exe 或完整路径"; value <=> root.ai-editor-executable; }
+                    if root.ai-editor-kind == 2: FormInput { x: 0; y: 182px; width: parent.width; height: 86px; label: "附加参数（每行一项）"; placeholder: "--model\ngpt-5"; value <=> root.ai-editor-arguments; multiline: true; }
+
+                    if root.ai-editor-kind < 2: Rectangle {
+                        x: 0; y: 242px; width: parent.width; height: 72px; background: transparent;
+                        Text { x: 0; y: 0; width: parent.width; height: 16px; text: "API Key（可选）"; color: #5a6577; font-size: 10px; }
+                        Rectangle {
+                            x: 0; y: 18px; width: parent.width - 76px; height: 34px; background: #ffffff; border-color: secret-input.has-focus ? #2f6bff88 : #141e3c20; border-width: 1px; border-radius: 6px;
+                            secret-input := TextInput { x: 8px; y: 5px; width: parent.width - 16px; height: parent.height - 10px; text <=> root.ai-editor-api-key; input-type: password; single-line: true; color: #1c2433; font-size: 11px; }
+                            if secret-input.text == "": Text { x: 8px; y: 5px; width: parent.width - 16px; height: parent.height - 10px; text: root.ai-editor-has-api-key ? "留空保留已存密钥" : "无需密钥时留空"; color: #a1a9b6; font-size: 11px; vertical-alignment: center; }
+                        }
+                        if root.ai-editor-has-api-key: Rectangle {
+                            x: parent.width - 68px; y: 18px; width: 68px; height: 34px; background: root.ai-editor-clear-api-key ? #fff1f2 : #eef2f8; border-radius: 6px;
+                            Text { text: root.ai-editor-clear-api-key ? "将清除" : "清除密钥"; color: #e04b59; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.ai-editor-clear-api-key = !root.ai-editor-clear-api-key; if root.ai-editor-clear-api-key { root.ai-editor-api-key = ""; } } }
+                        }
+                        Text { x: 0; y: 55px; width: parent.width; height: 15px; text: "密钥仅保存到 Windows 凭据管理器"; color: #8b94a6; font-size: 9px; }
+                    }
+
+                    Text { x: 0; y: 322px; width: parent.width; height: 34px; text: root.ai-management-message; color: root.ai-management-message == "配置格式有效" ? #28a96b : #e04b59; font-size: 10px; wrap: word-wrap; vertical-alignment: center; }
+                    Rectangle {
+                        x: 0; y: parent.height - 40px; width: 92px; height: 34px; background: check-touch.has-hover ? #eaf1ff : #eef2f8; border-radius: 7px;
+                        Text { text: "检查配置"; color: #2f6bff; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        check-touch := TouchArea { enabled: !root.conversation-busy; clicked => { root.ai-management-message = root.ai-model-check-requested(root.ai-editor-index, root.ai-editor-kind, root.ai-editor-name, root.ai-editor-endpoint, root.ai-editor-model, root.ai-editor-executable, root.ai-editor-arguments); } }
+                    }
+                    Rectangle {
+                        x: parent.width - 178px; y: parent.height - 40px; width: 78px; height: 34px; background: cancel-edit.has-hover ? #e6eaf0 : #eef2f8; border-radius: 7px;
+                        Text { text: "取消"; color: #5a6577; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        cancel-edit := TouchArea { clicked => { root.ai-editor-open = false; root.ai-editor-api-key = ""; root.ai-management-message = ""; } }
+                    }
+                    Rectangle {
+                        x: parent.width - 92px; y: parent.height - 40px; width: 92px; height: 34px; background: root.conversation-busy ? #c8cfda : save-touch.has-hover ? #245fe6 : #2f6bff; border-radius: 7px;
+                        Text { text: "保存"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        save-touch := TouchArea {
+                            enabled: !root.conversation-busy;
+                            clicked => {
+                                if root.ai-model-save-requested(root.ai-editor-index, root.ai-editor-kind, root.ai-editor-name, root.ai-editor-endpoint, root.ai-editor-model, root.ai-editor-executable, root.ai-editor-arguments, root.ai-editor-api-key, root.ai-editor-clear-api-key) {
+                                    root.ai-editor-open = false;
+                                    root.ai-editor-api-key = "";
+                                    root.ai-management-message = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.ai-delete-confirm-open: Rectangle {
+                    x: 0; y: 0; width: parent.width; height: parent.height; background: #16233a55; z: 30;
+                    Rectangle {
+                        x: 34px; y: 190px; width: parent.width - 68px; height: 150px; background: #ffffff; border-color: #141e3c20; border-width: 1px; border-radius: 8px;
+                        Text { x: 16px; y: 16px; width: parent.width - 32px; height: 24px; text: "删除这个模型？"; color: #1c2433; font-size: 14px; font-weight: 700; }
+                        Text { x: 16px; y: 46px; width: parent.width - 32px; height: 38px; text: "模型配置及其 API Key 将被删除。"; color: #5a6577; font-size: 11px; wrap: word-wrap; }
+                        Rectangle { x: 16px; y: 100px; width: 92px; height: 34px; background: #eef2f8; border-radius: 7px; Text { text: "取消"; color: #5a6577; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; } TouchArea { clicked => { root.ai-delete-confirm-open = false; } } }
+                        Rectangle { x: parent.width - 108px; y: 100px; width: 92px; height: 34px; background: #e04b59; border-radius: 7px; Text { text: "确认删除"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; } TouchArea { clicked => { if root.ai-model-delete-confirmed(root.ai-editor-index) { root.ai-delete-confirm-open = false; } } } }
+                    }
+                }
             }
         }
     }

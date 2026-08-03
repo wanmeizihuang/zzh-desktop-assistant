@@ -1,10 +1,32 @@
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant},
+};
+
+mod sensor_service;
+
+pub const DEFAULT_HISTORY_RETENTION: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_HISTORY_MAX_SAMPLES: usize = 301;
+const MAX_COUNTER_SAMPLE_GAP: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceStatus {
     Available,
     WarmingUp,
     Unavailable,
+    TemporarilyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotFreshness {
+    Fresh,
+    Stale,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MetricSourceError {
+    Unsupported,
+    TemporarilyUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,10 +50,13 @@ impl<T> MetricValue<T> {
         }
     }
 
-    fn unavailable() -> Self {
+    fn from_source_error(error: MetricSourceError) -> Self {
         Self {
             value: None,
-            status: SourceStatus::Unavailable,
+            status: match error {
+                MetricSourceError::Unsupported => SourceStatus::Unavailable,
+                MetricSourceError::TemporarilyUnavailable => SourceStatus::TemporarilyUnavailable,
+            },
         }
     }
 }
@@ -76,12 +101,137 @@ impl VideoMemoryUsage {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MetricSnapshot {
+    pub sampled_at: Instant,
     pub cpu_total_percent: MetricValue<f32>,
+    pub cpu_temperature_celsius: MetricValue<f32>,
+    pub cpu_temperature_info: Option<TemperatureInfo>,
     pub memory: MetricValue<MemoryUsage>,
     pub network: MetricValue<NetworkThroughput>,
     pub gpu_total_percent: MetricValue<f32>,
     pub video_memory: MetricValue<VideoMemoryUsage>,
     pub temperature_celsius: MetricValue<f32>,
+    pub temperature_info: Option<TemperatureInfo>,
+    pub temperature_target: Option<GpuTemperatureTarget>,
+    pub sensor_service_status: SensorServiceStatus,
+}
+
+impl MetricSnapshot {
+    pub fn freshness_at(self, now: Instant, maximum_age: Duration) -> SnapshotFreshness {
+        match now.checked_duration_since(self.sampled_at) {
+            Some(age) if age > maximum_age => SnapshotFreshness::Stale,
+            _ => SnapshotFreshness::Fresh,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MetricHistory {
+    retention: Duration,
+    max_samples: usize,
+    snapshots: VecDeque<MetricSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrendPoint<T> {
+    pub sampled_at: Instant,
+    pub value: Option<T>,
+}
+
+impl MetricHistory {
+    pub fn new(retention: Duration) -> Self {
+        Self::with_limits(retention, DEFAULT_HISTORY_MAX_SAMPLES)
+    }
+
+    pub fn with_limits(retention: Duration, max_samples: usize) -> Self {
+        Self {
+            retention,
+            max_samples: max_samples.max(1),
+            snapshots: VecDeque::new(),
+        }
+    }
+
+    pub fn push(&mut self, snapshot: MetricSnapshot) -> bool {
+        if self
+            .snapshots
+            .back()
+            .is_some_and(|latest| snapshot.sampled_at < latest.sampled_at)
+        {
+            return false;
+        }
+
+        self.snapshots.push_back(snapshot);
+        let Some(cutoff) = snapshot.sampled_at.checked_sub(self.retention) else {
+            return true;
+        };
+        while self
+            .snapshots
+            .front()
+            .is_some_and(|oldest| oldest.sampled_at < cutoff)
+        {
+            self.snapshots.pop_front();
+        }
+        while self.snapshots.len() > self.max_samples {
+            self.snapshots.pop_front();
+        }
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.snapshots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
+    pub fn oldest(&self) -> Option<&MetricSnapshot> {
+        self.snapshots.front()
+    }
+
+    pub fn latest(&self) -> Option<&MetricSnapshot> {
+        self.snapshots.back()
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &MetricSnapshot> {
+        self.snapshots.iter()
+    }
+
+    pub fn trend_points<T>(
+        &self,
+        maximum_points: usize,
+        mut value_of: impl FnMut(&MetricSnapshot) -> Option<T>,
+    ) -> Vec<TrendPoint<T>> {
+        let output_len = maximum_points.min(self.snapshots.len());
+        if output_len == 0 {
+            return Vec::new();
+        }
+
+        if output_len == 1 {
+            let snapshot = self.snapshots.back().expect("history is not empty");
+            return vec![TrendPoint {
+                sampled_at: snapshot.sampled_at,
+                value: value_of(snapshot),
+            }];
+        }
+
+        let last_index = self.snapshots.len() - 1;
+        (0..output_len)
+            .map(|point_index| {
+                let snapshot_index = point_index * last_index / (output_len - 1);
+                let snapshot = &self.snapshots[snapshot_index];
+                TrendPoint {
+                    sampled_at: snapshot.sampled_at,
+                    value: value_of(snapshot),
+                }
+            })
+            .collect()
+    }
+}
+
+impl Default for MetricHistory {
+    fn default() -> Self {
+        Self::new(DEFAULT_HISTORY_RETENTION)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +245,7 @@ struct CpuTimes {
 struct NetworkCounters {
     received_bytes: u64,
     transmitted_bytes: u64,
+    interface_signature: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,18 +263,102 @@ struct VideoAdapterCandidate {
     budget_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GpuTemperatureTarget {
+    Integrated,
+    Dedicated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TemperatureSensor {
+    CpuPackage,
+    TctlTdie,
+    GpuCore,
+    GpuEdge,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TemperatureSource {
+    LibreHardwareMonitor,
+    IntelLevelZero,
+    NvidiaNvml,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TemperatureInfo {
+    pub sensor: TemperatureSensor,
+    pub source: TemperatureSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SensorServiceStatus {
+    Ready,
+    NotInstalled,
+    PawnIoNotInstalled,
+    PawnIoDeviceUnavailable,
+    InitializationFailed,
+    Starting,
+    TemporarilyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TemperatureReading {
+    celsius: f32,
+    sensor: TemperatureSensor,
+    source: TemperatureSource,
+}
+
+impl TemperatureReading {
+    const fn info(self) -> TemperatureInfo {
+        TemperatureInfo {
+            sensor: self.sensor,
+            source: self.source,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TemperatureSample {
+    cpu: Result<TemperatureReading, MetricSourceError>,
+    gpu: Result<TemperatureReading, MetricSourceError>,
+    service_status: SensorServiceStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GpuAdapterIdentityCandidate {
+    index: usize,
+    is_software: bool,
+    is_integrated: bool,
+    vendor_id: u32,
+    dedicated_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeGpuTemperatureProvider {
+    IntelLevelZero,
+    NvidiaNvml,
+}
+
 pub struct SystemSampler {
-    previous_cpu: Option<CpuTimes>,
+    previous_cpu: Option<(CpuTimes, Instant)>,
     previous_network: Option<(NetworkCounters, Instant)>,
     gpu: platform::GpuSampler,
     temperature: platform::TemperatureSampler,
+}
+
+/// # Safety
+///
+/// Call this once during process startup, before any worker threads are created.
+/// Legacy Intel Level Zero loaders inspect this process environment switch.
+pub unsafe fn prepare_gpu_temperature_sources() {
+    unsafe { platform::prepare_gpu_temperature_sources() };
 }
 
 impl SystemSampler {
     pub fn new() -> Self {
         let now = Instant::now();
         Self {
-            previous_cpu: platform::read_cpu_times().ok(),
+            previous_cpu: platform::read_cpu_times().ok().map(|times| (times, now)),
             previous_network: platform::read_network_counters()
                 .ok()
                 .map(|counters| (counters, now)),
@@ -133,25 +368,53 @@ impl SystemSampler {
     }
 
     pub fn sample(&mut self) -> MetricSnapshot {
+        let cpu_total_percent = self.sample_cpu();
+        let temperatures = self.temperature.sample();
+        let cpu_temperature_celsius = temperatures
+            .cpu
+            .map(|reading| MetricValue::available(reading.celsius))
+            .unwrap_or_else(MetricValue::from_source_error);
+        let cpu_temperature_info = temperatures.cpu.ok().map(TemperatureReading::info);
+        let memory = self.sample_memory();
+        let network = self.sample_network();
+        let gpu_total_percent = self.sample_gpu();
+        let video_memory = self.sample_video_memory();
+        let temperature_celsius = temperatures
+            .gpu
+            .map(|reading| MetricValue::available(reading.celsius))
+            .unwrap_or_else(MetricValue::from_source_error);
+        let temperature_info = temperatures.gpu.ok().map(TemperatureReading::info);
+        let temperature_target = self.temperature.target();
+
         MetricSnapshot {
-            cpu_total_percent: self.sample_cpu(),
-            memory: self.sample_memory(),
-            network: self.sample_network(),
-            gpu_total_percent: self.sample_gpu(),
-            video_memory: self.sample_video_memory(),
-            temperature_celsius: self.sample_temperature(),
+            sampled_at: Instant::now(),
+            cpu_total_percent,
+            cpu_temperature_celsius,
+            cpu_temperature_info,
+            memory,
+            network,
+            gpu_total_percent,
+            video_memory,
+            temperature_celsius,
+            temperature_info,
+            temperature_target,
+            sensor_service_status: temperatures.service_status,
         }
     }
 
     fn sample_cpu(&mut self) -> MetricValue<f32> {
         let Ok(current) = platform::read_cpu_times() else {
-            return MetricValue::unavailable();
+            self.previous_cpu = None;
+            return MetricValue::from_source_error(MetricSourceError::TemporarilyUnavailable);
         };
+        let now = Instant::now();
 
-        let value = self
-            .previous_cpu
-            .and_then(|previous| calculate_cpu_percent(previous, current));
-        self.previous_cpu = Some(current);
+        let value = self.previous_cpu.and_then(|(previous, sampled_at)| {
+            now.checked_duration_since(sampled_at)
+                .filter(|elapsed| sample_gap_is_usable(*elapsed))
+                .and_then(|_| calculate_cpu_percent(previous, current))
+        });
+        self.previous_cpu = Some((current, now));
 
         value.map_or_else(MetricValue::warming_up, MetricValue::available)
     }
@@ -159,16 +422,20 @@ impl SystemSampler {
     fn sample_memory(&self) -> MetricValue<MemoryUsage> {
         platform::read_memory_usage()
             .map(MetricValue::available)
-            .unwrap_or_else(|_| MetricValue::unavailable())
+            .unwrap_or_else(|_| {
+                MetricValue::from_source_error(MetricSourceError::TemporarilyUnavailable)
+            })
     }
 
     fn sample_network(&mut self) -> MetricValue<NetworkThroughput> {
         let Ok(current) = platform::read_network_counters() else {
-            return MetricValue::unavailable();
+            self.previous_network = None;
+            return MetricValue::from_source_error(MetricSourceError::TemporarilyUnavailable);
         };
         let now = Instant::now();
-        let value = self.previous_network.map(|(previous, sampled_at)| {
-            calculate_network_throughput(previous, current, now.duration_since(sampled_at))
+        let value = self.previous_network.and_then(|(previous, sampled_at)| {
+            now.checked_duration_since(sampled_at)
+                .and_then(|elapsed| calculate_network_throughput(previous, current, elapsed))
         });
         self.previous_network = Some((current, now));
 
@@ -179,7 +446,7 @@ impl SystemSampler {
         match self.gpu.read_usage_percent() {
             Ok(Some(value)) => MetricValue::available(value),
             Ok(None) => MetricValue::warming_up(),
-            Err(()) => MetricValue::unavailable(),
+            Err(error) => MetricValue::from_source_error(error),
         }
     }
 
@@ -187,14 +454,7 @@ impl SystemSampler {
         self.gpu
             .read_video_memory()
             .map(MetricValue::available)
-            .unwrap_or_else(|_| MetricValue::unavailable())
-    }
-
-    fn sample_temperature(&mut self) -> MetricValue<f32> {
-        self.temperature
-            .read_celsius()
-            .map(MetricValue::available)
-            .unwrap_or_else(|_| MetricValue::unavailable())
+            .unwrap_or_else(MetricValue::from_source_error)
     }
 }
 
@@ -220,17 +480,22 @@ fn calculate_cpu_percent(previous: CpuTimes, current: CpuTimes) -> Option<f32> {
 fn calculate_network_throughput(
     previous: NetworkCounters,
     current: NetworkCounters,
-    elapsed: std::time::Duration,
-) -> NetworkThroughput {
-    let seconds = elapsed.as_secs_f64();
-    if seconds <= f64::EPSILON {
-        return NetworkThroughput {
-            received_bytes_per_second: 0.0,
-            transmitted_bytes_per_second: 0.0,
-        };
+    elapsed: Duration,
+) -> Option<NetworkThroughput> {
+    if !sample_gap_is_usable(elapsed)
+        || previous.interface_signature != current.interface_signature
+        || current.received_bytes < previous.received_bytes
+        || current.transmitted_bytes < previous.transmitted_bytes
+    {
+        return None;
     }
 
-    NetworkThroughput {
+    let seconds = elapsed.as_secs_f64();
+    if seconds <= f64::EPSILON {
+        return None;
+    }
+
+    Some(NetworkThroughput {
         received_bytes_per_second: current
             .received_bytes
             .saturating_sub(previous.received_bytes) as f64
@@ -240,7 +505,15 @@ fn calculate_network_throughput(
             .saturating_sub(previous.transmitted_bytes)
             as f64
             / seconds,
-    }
+    })
+}
+
+fn sample_gap_is_usable(elapsed: Duration) -> bool {
+    !elapsed.is_zero() && elapsed <= MAX_COUNTER_SAMPLE_GAP
+}
+
+fn include_network_interface(operational: bool, loopback: bool, hardware: bool) -> bool {
+    operational && !loopback && hardware
 }
 
 fn aggregate_gpu_percent(samples: &[GpuEngineSample<'_>]) -> Option<f32> {
@@ -284,19 +557,72 @@ fn select_video_adapter(candidates: &[VideoAdapterCandidate]) -> Option<usize> {
         .map(|candidate| candidate.index)
 }
 
-fn select_hottest_temperature_celsius(samples: &[f64], units_per_kelvin: f64) -> Option<f32> {
-    if !units_per_kelvin.is_finite() || units_per_kelvin <= 0.0 {
-        return None;
-    }
+fn select_gpu_temperature_target(
+    candidates: &[GpuAdapterIdentityCandidate],
+) -> Option<(usize, u32, GpuTemperatureTarget)> {
+    const SUPPORTED_GPU_VENDORS: [u32; 3] = [0x8086, 0x10de, 0x1002];
 
-    samples
+    candidates
         .iter()
-        .filter_map(|sample| {
-            let celsius = *sample / units_per_kelvin - 273.15;
-            (celsius.is_finite() && (-50.0..=200.0).contains(&celsius)).then_some(celsius)
+        .filter(|candidate| {
+            !candidate.is_software && SUPPORTED_GPU_VENDORS.contains(&candidate.vendor_id)
         })
-        .max_by(f64::total_cmp)
-        .map(|value| value as f32)
+        .max_by_key(|candidate| {
+            (
+                !candidate.is_integrated,
+                candidate.dedicated_bytes,
+                std::cmp::Reverse(candidate.index),
+            )
+        })
+        .map(|candidate| {
+            (
+                candidate.index,
+                candidate.vendor_id,
+                if candidate.is_integrated {
+                    GpuTemperatureTarget::Integrated
+                } else {
+                    GpuTemperatureTarget::Dedicated
+                },
+            )
+        })
+}
+
+fn intel_level_zero_device_matches_target(
+    vendor_id: u32,
+    flags: u32,
+    target: GpuTemperatureTarget,
+) -> bool {
+    const INTEL_VENDOR_ID: u32 = 0x8086;
+    const INTEGRATED_FLAG: u32 = 1;
+
+    vendor_id == INTEL_VENDOR_ID
+        && match target {
+            GpuTemperatureTarget::Integrated => flags & INTEGRATED_FLAG != 0,
+            GpuTemperatureTarget::Dedicated => flags & INTEGRATED_FLAG == 0,
+        }
+}
+
+fn native_gpu_temperature_provider(
+    vendor_id: u32,
+    target: GpuTemperatureTarget,
+) -> Option<NativeGpuTemperatureProvider> {
+    match (vendor_id, target) {
+        (0x8086, _) => Some(NativeGpuTemperatureProvider::IntelLevelZero),
+        (0x10de, GpuTemperatureTarget::Dedicated) => Some(NativeGpuTemperatureProvider::NvidiaNvml),
+        _ => None,
+    }
+}
+
+fn level_zero_sensor_priority(sensor_type: u32) -> Option<u8> {
+    match sensor_type {
+        1 => Some(0), // GPU
+        6 => Some(1), // GPU board
+        _ => None,
+    }
+}
+
+fn valid_gpu_temperature_celsius(value: f64) -> Option<f32> {
+    (value.is_finite() && (0.0..=150.0).contains(&value)).then_some(value as f32)
 }
 
 fn adapter_luid_key(instance: &str) -> Option<String> {
@@ -314,11 +640,19 @@ mod platform {
     use std::{collections::HashMap, ffi::c_void, mem::size_of, ptr, slice};
 
     use windows::Win32::{
-        Foundation::{ERROR_SUCCESS, FILETIME},
-        Graphics::Dxgi::{
-            CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-            DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3,
-            IDXGIFactory1,
+        Foundation::{ERROR_SUCCESS, FILETIME, FreeLibrary, HMODULE},
+        Graphics::{
+            DXCore::{
+                DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS, DXCoreAdapterProperty,
+                DXCoreCreateAdapterFactory, DXCoreHardwareID, DXCoreHardwareIDParts,
+                DedicatedAdapterMemory, HardwareID, HardwareIDParts, IDXCoreAdapter,
+                IDXCoreAdapterFactory, IDXCoreAdapterList, IsHardware, IsIntegrated,
+            },
+            Dxgi::{
+                CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+                DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3,
+                IDXGIFactory1,
+            },
         },
         NetworkManagement::{
             IpHelper::{
@@ -327,6 +661,7 @@ mod platform {
             Ndis::IfOperStatusUp,
         },
         System::{
+            LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
             Performance::{
                 PDH_CSTATUS_NEW_DATA, PDH_CSTATUS_VALID_DATA, PDH_FMT_COUNTERVALUE_ITEM_W,
                 PDH_FMT_DOUBLE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
@@ -337,13 +672,23 @@ mod platform {
             Threading::GetSystemTimes,
         },
     };
-    use windows::core::{Interface, PCWSTR, w};
+    use windows::core::{Interface, PCSTR, PCWSTR, s, w};
 
     use super::{
-        CpuTimes, GpuEngineSample, MemoryUsage, NetworkCounters, VideoAdapterCandidate,
-        VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent,
-        select_hottest_temperature_celsius, select_video_adapter,
+        CpuTimes, GpuAdapterIdentityCandidate, GpuEngineSample, GpuTemperatureTarget, MemoryUsage,
+        MetricSourceError, NativeGpuTemperatureProvider, NetworkCounters, SensorServiceStatus,
+        TemperatureReading, TemperatureSample, TemperatureSensor, TemperatureSource,
+        VideoAdapterCandidate, VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent,
+        include_network_interface, intel_level_zero_device_matches_target,
+        level_zero_sensor_priority, native_gpu_temperature_provider, select_gpu_temperature_target,
+        select_video_adapter, valid_gpu_temperature_celsius,
     };
+    use crate::sensor_service::{ClientResultKind, SensorServiceClient};
+
+    pub unsafe fn prepare_gpu_temperature_sources() {
+        // SAFETY: The desktop calls this before starting any worker threads.
+        unsafe { std::env::set_var("ZES_ENABLE_SYSMAN", "1") };
+    }
 
     pub struct GpuSampler {
         usage: Option<PdhGpuUsage>,
@@ -351,25 +696,113 @@ mod platform {
     }
 
     pub struct TemperatureSampler {
-        reader: Option<PdhTemperature>,
+        target: Option<GpuTemperatureTarget>,
+        vendor_id: Option<u32>,
+        level_zero: Option<IntelLevelZeroTemperature>,
+        nvml: Option<NvidiaNvmlTemperature>,
+        service: SensorServiceClient,
     }
 
     impl TemperatureSampler {
         pub fn new() -> Self {
+            let selected = enumerate_gpu_temperature_target().ok().flatten();
+            let target = selected.map(|(_, _, target)| target);
+            let vendor_id = selected.map(|(_, vendor_id, _)| vendor_id);
+            let provider = selected.and_then(|(_, vendor_id, target)| {
+                native_gpu_temperature_provider(vendor_id, target)
+            });
+            let level_zero = match (provider, target) {
+                (Some(NativeGpuTemperatureProvider::IntelLevelZero), Some(target)) => {
+                    IntelLevelZeroTemperature::new(target).ok()
+                }
+                _ => None,
+            };
+            let nvml = matches!(provider, Some(NativeGpuTemperatureProvider::NvidiaNvml))
+                .then(NvidiaNvmlTemperature::new)
+                .and_then(Result::ok);
             Self {
-                reader: PdhTemperature::new(
-                    w!(r"\Thermal Zone Information(*)\High Precision Temperature"),
-                    10.0,
-                )
-                .or_else(|_| {
-                    PdhTemperature::new(w!(r"\Thermal Zone Information(*)\Temperature"), 1.0)
-                })
-                .ok(),
+                target,
+                vendor_id,
+                level_zero,
+                nvml,
+                service: SensorServiceClient::new(),
             }
         }
 
-        pub fn read_celsius(&mut self) -> Result<f32, ()> {
-            self.reader.as_mut().ok_or(())?.sample()
+        pub fn sample(&mut self) -> TemperatureSample {
+            let service_result = self.service.read();
+            let service_status = match service_result.kind {
+                ClientResultKind::Snapshot => match service_result
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.service_error.as_deref())
+                {
+                    None => SensorServiceStatus::Ready,
+                    Some("pawnio_not_installed") => SensorServiceStatus::PawnIoNotInstalled,
+                    Some("pawnio_device_unavailable") => {
+                        SensorServiceStatus::PawnIoDeviceUnavailable
+                    }
+                    Some("sensor_initialization_failed") => {
+                        SensorServiceStatus::InitializationFailed
+                    }
+                    Some(_) => SensorServiceStatus::TemporarilyUnavailable,
+                },
+                ClientResultKind::NotInstalled => SensorServiceStatus::NotInstalled,
+                ClientResultKind::Starting => SensorServiceStatus::Starting,
+                ClientResultKind::TemporarilyUnavailable => {
+                    SensorServiceStatus::TemporarilyUnavailable
+                }
+            };
+
+            let service_error = match service_result.kind {
+                ClientResultKind::NotInstalled => MetricSourceError::Unsupported,
+                _ => MetricSourceError::TemporarilyUnavailable,
+            };
+            let service_cpu =
+                service_result
+                    .snapshot
+                    .as_ref()
+                    .map_or(Err(service_error), |snapshot| {
+                        if snapshot.service_error.is_some() {
+                            Err(MetricSourceError::TemporarilyUnavailable)
+                        } else if let Some(reading) = snapshot.cpu {
+                            Ok(reading)
+                        } else if snapshot.cpu_error.as_deref() == Some("cpu_package_unavailable") {
+                            Err(MetricSourceError::Unsupported)
+                        } else {
+                            Err(MetricSourceError::TemporarilyUnavailable)
+                        }
+                    });
+
+            let service_gpu = match (self.vendor_id, service_result.snapshot.as_ref()) {
+                (None, _) => Err(MetricSourceError::Unsupported),
+                (Some(_), Some(snapshot)) if snapshot.service_error.is_some() => {
+                    Err(MetricSourceError::TemporarilyUnavailable)
+                }
+                (Some(vendor_id), Some(snapshot)) => snapshot
+                    .gpus
+                    .iter()
+                    .find_map(|(candidate_vendor_id, reading)| {
+                        (*candidate_vendor_id == vendor_id).then_some(*reading)
+                    })
+                    .ok_or(MetricSourceError::Unsupported),
+                (Some(_), None) => Err(service_error),
+            };
+
+            let native_gpu = self
+                .level_zero
+                .as_mut()
+                .and_then(|reader| reader.sample().ok())
+                .or_else(|| self.nvml.as_mut().and_then(|reader| reader.sample().ok()));
+            TemperatureSample {
+                cpu: service_cpu,
+                gpu: native_gpu.map_or(service_gpu, Ok),
+                service_status,
+            }
+        }
+
+        pub const fn target(&self) -> Option<GpuTemperatureTarget> {
+            self.target
         }
     }
 
@@ -381,12 +814,20 @@ mod platform {
             }
         }
 
-        pub fn read_usage_percent(&mut self) -> Result<Option<f32>, ()> {
-            self.usage.as_mut().ok_or(())?.sample()
+        pub fn read_usage_percent(&mut self) -> Result<Option<f32>, MetricSourceError> {
+            self.usage
+                .as_mut()
+                .ok_or(MetricSourceError::Unsupported)?
+                .sample()
+                .map_err(|_| MetricSourceError::TemporarilyUnavailable)
         }
 
-        pub fn read_video_memory(&mut self) -> Result<VideoMemoryUsage, ()> {
-            self.video_memory.as_mut().ok_or(())?.sample()
+        pub fn read_video_memory(&mut self) -> Result<VideoMemoryUsage, MetricSourceError> {
+            self.video_memory
+                .as_mut()
+                .ok_or(MetricSourceError::Unsupported)?
+                .sample()
+                .map_err(|_| MetricSourceError::TemporarilyUnavailable)
         }
     }
 
@@ -428,15 +869,28 @@ mod platform {
         let mut counters = NetworkCounters {
             received_bytes: 0,
             transmitted_bytes: 0,
+            interface_signature: 0,
         };
+        let mut active_interfaces = 0u64;
         for row in table.rows() {
-            if row.OperStatus != IfOperStatusUp || row.Type == IF_TYPE_SOFTWARE_LOOPBACK {
+            let hardware = row.InterfaceAndOperStatusFlags._bitfield & 1 != 0;
+            if !include_network_interface(
+                row.OperStatus == IfOperStatusUp,
+                row.Type == IF_TYPE_SOFTWARE_LOOPBACK,
+                hardware,
+            ) {
                 continue;
             }
 
             counters.received_bytes = counters.received_bytes.saturating_add(row.InOctets);
             counters.transmitted_bytes = counters.transmitted_bytes.saturating_add(row.OutOctets);
+            let interface_hash = u64::from(row.InterfaceIndex)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .rotate_left(row.InterfaceIndex % 64);
+            counters.interface_signature ^= interface_hash;
+            active_interfaces = active_interfaces.saturating_add(1);
         }
+        counters.interface_signature ^= active_interfaces.wrapping_mul(0xd6e8_feb8_6659_fd93);
 
         Ok(counters)
     }
@@ -445,49 +899,407 @@ mod platform {
         (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
     }
 
-    struct PdhTemperature {
-        query: PDH_HQUERY,
-        counter: PDH_HCOUNTER,
-        units_per_kelvin: f64,
+    type LevelZeroHandle = *mut c_void;
+    type LevelZeroInit = unsafe extern "system" fn(u32) -> u32;
+    type LevelZeroDriverGet = unsafe extern "system" fn(*mut u32, *mut LevelZeroHandle) -> u32;
+    type LevelZeroDeviceGet =
+        unsafe extern "system" fn(LevelZeroHandle, *mut u32, *mut LevelZeroHandle) -> u32;
+    type LevelZeroDeviceGetProperties =
+        unsafe extern "system" fn(LevelZeroHandle, *mut ZesDeviceProperties) -> u32;
+    type LevelZeroTemperatureEnum =
+        unsafe extern "system" fn(LevelZeroHandle, *mut u32, *mut LevelZeroHandle) -> u32;
+    type LevelZeroTemperatureGetProperties =
+        unsafe extern "system" fn(LevelZeroHandle, *mut ZesTemperatureProperties) -> u32;
+    type LevelZeroTemperatureGetState = unsafe extern "system" fn(LevelZeroHandle, *mut f64) -> u32;
+    type NvmlHandle = *mut c_void;
+    type NvmlInit = unsafe extern "C" fn() -> i32;
+    type NvmlShutdown = unsafe extern "C" fn() -> i32;
+    type NvmlDeviceGetCount = unsafe extern "C" fn(*mut u32) -> i32;
+    type NvmlDeviceGetHandleByIndex = unsafe extern "C" fn(u32, *mut NvmlHandle) -> i32;
+    type NvmlDeviceGetTemperature = unsafe extern "C" fn(NvmlHandle, u32, *mut u32) -> i32;
+
+    #[repr(C)]
+    struct ZeDeviceProperties {
+        stype: u32,
+        p_next: *mut c_void,
+        device_type: u32,
+        vendor_id: u32,
+        device_id: u32,
+        flags: u32,
+        subdevice_id: u32,
+        core_clock_rate: u32,
+        max_mem_alloc_size: u64,
+        max_hardware_contexts: u32,
+        max_command_queue_priority: u32,
+        num_threads_per_eu: u32,
+        physical_eu_simd_width: u32,
+        num_eus_per_subslice: u32,
+        num_subslices_per_slice: u32,
+        num_slices: u32,
+        timer_resolution: u64,
+        timestamp_valid_bits: u32,
+        kernel_timestamp_valid_bits: u32,
+        uuid: [u8; 16],
+        name: [i8; 256],
     }
 
-    impl PdhTemperature {
-        fn new(path: PCWSTR, units_per_kelvin: f64) -> Result<Self, ()> {
-            let mut query = PDH_HQUERY::default();
-            if unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut query) } != 0 {
-                return Err(());
-            }
+    #[repr(C)]
+    struct ZesDeviceProperties {
+        stype: u32,
+        p_next: *mut c_void,
+        core: ZeDeviceProperties,
+        num_subdevices: u32,
+        serial_number: [i8; 64],
+        board_number: [i8; 64],
+        brand_name: [i8; 64],
+        model_name: [i8; 64],
+        vendor_name: [i8; 64],
+        driver_version: [i8; 64],
+    }
 
-            let mut reader = Self {
-                query,
-                counter: PDH_HCOUNTER::default(),
-                units_per_kelvin,
-            };
-            if unsafe { PdhAddEnglishCounterW(reader.query, path, 0, &mut reader.counter) } != 0
-                || unsafe { PdhCollectQueryData(reader.query) } != 0
-            {
-                return Err(());
-            }
-            Ok(reader)
-        }
-
-        fn sample(&mut self) -> Result<f32, ()> {
-            if unsafe { PdhCollectQueryData(self.query) } != 0 {
-                return Err(());
-            }
-            let samples = read_formatted_samples(self.counter, PDH_FMT_DOUBLE)?
-                .into_iter()
-                .map(|(_, value)| value)
-                .collect::<Vec<_>>();
-            select_hottest_temperature_celsius(&samples, self.units_per_kelvin).ok_or(())
+    impl ZesDeviceProperties {
+        fn new() -> Self {
+            // All-zero byte patterns are valid for this C POD structure.
+            let mut properties = unsafe { std::mem::zeroed::<Self>() };
+            properties.stype = 0x1;
+            properties.core.stype = 0x3;
+            properties
         }
     }
 
-    impl Drop for PdhTemperature {
+    #[repr(C)]
+    struct ZesTemperatureProperties {
+        stype: u32,
+        p_next: *mut c_void,
+        sensor_type: u32,
+        on_subdevice: u32,
+        subdevice_id: u32,
+        max_temperature: f64,
+        is_critical_supported: u32,
+        is_threshold_1_supported: u32,
+        is_threshold_2_supported: u32,
+    }
+
+    impl ZesTemperatureProperties {
+        fn new() -> Self {
+            Self {
+                stype: 0x14,
+                p_next: ptr::null_mut(),
+                sensor_type: 0,
+                on_subdevice: 0,
+                subdevice_id: 0,
+                max_temperature: 0.0,
+                is_critical_supported: 0,
+                is_threshold_1_supported: 0,
+                is_threshold_2_supported: 0,
+            }
+        }
+    }
+
+    struct LevelZeroModule(HMODULE);
+
+    impl LevelZeroModule {
+        fn load() -> Result<Self, ()> {
+            unsafe {
+                LoadLibraryExW(w!("ze_loader.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
+                    .map(Self)
+                    .map_err(|_| ())
+            }
+        }
+
+        fn procedure(&self, name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
+            unsafe { GetProcAddress(self.0, name) }
+        }
+    }
+
+    impl Drop for LevelZeroModule {
         fn drop(&mut self) {
-            if !self.query.is_invalid() {
-                unsafe { PdhCloseQuery(self.query) };
+            let _ = unsafe { FreeLibrary(self.0) };
+        }
+    }
+
+    struct IntelLevelZeroTemperature {
+        sensors: Vec<LevelZeroHandle>,
+        sensor: TemperatureSensor,
+        get_state: LevelZeroTemperatureGetState,
+        _module: LevelZeroModule,
+    }
+
+    impl IntelLevelZeroTemperature {
+        fn new(target: GpuTemperatureTarget) -> Result<Self, ()> {
+            let module = LevelZeroModule::load()?;
+
+            macro_rules! required_procedure {
+                ($name:expr, $function_type:ty) => {{
+                    let procedure = module.procedure($name).ok_or(())?;
+                    unsafe {
+                        std::mem::transmute::<unsafe extern "system" fn() -> isize, $function_type>(
+                            procedure,
+                        )
+                    }
+                }};
             }
+            macro_rules! optional_procedure {
+                ($name:expr, $function_type:ty) => {{
+                    module.procedure($name).map(|procedure| unsafe {
+                        std::mem::transmute::<unsafe extern "system" fn() -> isize, $function_type>(
+                            procedure,
+                        )
+                    })
+                }};
+            }
+
+            let modern_init = optional_procedure!(s!("zesInit"), LevelZeroInit);
+            let modern_driver_get = optional_procedure!(s!("zesDriverGet"), LevelZeroDriverGet);
+            let modern_device_get = optional_procedure!(s!("zesDeviceGet"), LevelZeroDeviceGet);
+            let (driver_get, device_get) = if let (Some(init), Some(driver_get), Some(device_get)) =
+                (modern_init, modern_driver_get, modern_device_get)
+            {
+                if unsafe { init(0) } != 0 {
+                    return Err(());
+                }
+                (driver_get, device_get)
+            } else {
+                let init = required_procedure!(s!("zeInit"), LevelZeroInit);
+                if unsafe { init(1) } != 0 {
+                    return Err(());
+                }
+                (
+                    required_procedure!(s!("zeDriverGet"), LevelZeroDriverGet),
+                    required_procedure!(s!("zeDeviceGet"), LevelZeroDeviceGet),
+                )
+            };
+            let device_get_properties =
+                required_procedure!(s!("zesDeviceGetProperties"), LevelZeroDeviceGetProperties);
+            let temperature_enum = required_procedure!(
+                s!("zesDeviceEnumTemperatureSensors"),
+                LevelZeroTemperatureEnum
+            );
+            let temperature_get_properties = required_procedure!(
+                s!("zesTemperatureGetProperties"),
+                LevelZeroTemperatureGetProperties
+            );
+            let get_state =
+                required_procedure!(s!("zesTemperatureGetState"), LevelZeroTemperatureGetState);
+
+            let mut driver_count = 0;
+            if unsafe { driver_get(&mut driver_count, ptr::null_mut()) } != 0 || driver_count == 0 {
+                return Err(());
+            }
+            let mut drivers = vec![ptr::null_mut(); driver_count as usize];
+            if unsafe { driver_get(&mut driver_count, drivers.as_mut_ptr()) } != 0 {
+                return Err(());
+            }
+            drivers.truncate(driver_count as usize);
+
+            let mut ranked_sensors = Vec::<(u8, LevelZeroHandle)>::new();
+            for driver in drivers {
+                let mut device_count = 0;
+                if unsafe { device_get(driver, &mut device_count, ptr::null_mut()) } != 0
+                    || device_count == 0
+                {
+                    continue;
+                }
+                let mut devices = vec![ptr::null_mut(); device_count as usize];
+                if unsafe { device_get(driver, &mut device_count, devices.as_mut_ptr()) } != 0 {
+                    continue;
+                }
+                devices.truncate(device_count as usize);
+
+                for device in devices {
+                    let mut device_properties = ZesDeviceProperties::new();
+                    if unsafe { device_get_properties(device, &mut device_properties) } != 0
+                        || !intel_level_zero_device_matches_target(
+                            device_properties.core.vendor_id,
+                            device_properties.core.flags,
+                            target,
+                        )
+                    {
+                        continue;
+                    }
+
+                    let mut sensor_count = 0;
+                    if unsafe { temperature_enum(device, &mut sensor_count, ptr::null_mut()) } != 0
+                        || sensor_count == 0
+                    {
+                        continue;
+                    }
+                    let mut sensors = vec![ptr::null_mut(); sensor_count as usize];
+                    if unsafe { temperature_enum(device, &mut sensor_count, sensors.as_mut_ptr()) }
+                        != 0
+                    {
+                        continue;
+                    }
+                    sensors.truncate(sensor_count as usize);
+
+                    for sensor in sensors {
+                        let mut properties = ZesTemperatureProperties::new();
+                        if unsafe { temperature_get_properties(sensor, &mut properties) } != 0 {
+                            continue;
+                        }
+                        if let Some(priority) = level_zero_sensor_priority(properties.sensor_type) {
+                            ranked_sensors.push((priority, sensor));
+                        }
+                    }
+                }
+            }
+
+            let best_priority = ranked_sensors
+                .iter()
+                .map(|(priority, _)| *priority)
+                .min()
+                .ok_or(())?;
+            let sensors = ranked_sensors
+                .into_iter()
+                .filter_map(|(priority, sensor)| (priority == best_priority).then_some(sensor))
+                .collect();
+            let sensor = match best_priority {
+                0 => TemperatureSensor::GpuCore,
+                1 => TemperatureSensor::GpuEdge,
+                _ => return Err(()),
+            };
+
+            Ok(Self {
+                sensors,
+                sensor,
+                get_state,
+                _module: module,
+            })
+        }
+
+        fn sample(&mut self) -> Result<TemperatureReading, ()> {
+            let celsius = self
+                .sensors
+                .iter()
+                .filter_map(|sensor| {
+                    let mut temperature = 0.0;
+                    (unsafe { (self.get_state)(*sensor, &mut temperature) } == 0)
+                        .then(|| valid_gpu_temperature_celsius(temperature))
+                        .flatten()
+                })
+                .max_by(f32::total_cmp)
+                .ok_or(())?;
+            Ok(TemperatureReading {
+                celsius,
+                sensor: self.sensor,
+                source: TemperatureSource::IntelLevelZero,
+            })
+        }
+    }
+
+    struct NvidiaNvmlModule(HMODULE);
+
+    impl NvidiaNvmlModule {
+        fn load() -> Result<Self, ()> {
+            unsafe {
+                LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
+                    .map(Self)
+                    .map_err(|_| ())
+            }
+        }
+
+        fn procedure(&self, name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
+            unsafe { GetProcAddress(self.0, name) }
+        }
+    }
+
+    impl Drop for NvidiaNvmlModule {
+        fn drop(&mut self) {
+            let _ = unsafe { FreeLibrary(self.0) };
+        }
+    }
+
+    struct NvidiaNvmlTemperature {
+        devices: Vec<NvmlHandle>,
+        get_temperature: NvmlDeviceGetTemperature,
+        shutdown: NvmlShutdown,
+        _module: NvidiaNvmlModule,
+    }
+
+    impl NvidiaNvmlTemperature {
+        fn new() -> Result<Self, ()> {
+            let module = NvidiaNvmlModule::load()?;
+
+            macro_rules! procedure {
+                ($name:expr, $function_type:ty) => {{
+                    let procedure = module.procedure($name).ok_or(())?;
+                    unsafe {
+                        std::mem::transmute::<unsafe extern "system" fn() -> isize, $function_type>(
+                            procedure,
+                        )
+                    }
+                }};
+            }
+
+            let init = procedure!(s!("nvmlInit_v2"), NvmlInit);
+            let shutdown = procedure!(s!("nvmlShutdown"), NvmlShutdown);
+            let get_count = procedure!(s!("nvmlDeviceGetCount_v2"), NvmlDeviceGetCount);
+            let get_handle = procedure!(
+                s!("nvmlDeviceGetHandleByIndex_v2"),
+                NvmlDeviceGetHandleByIndex
+            );
+            let get_temperature =
+                procedure!(s!("nvmlDeviceGetTemperature"), NvmlDeviceGetTemperature);
+
+            if unsafe { init() } != 0 {
+                return Err(());
+            }
+            let devices = (|| {
+                let mut count = 0_u32;
+                if unsafe { get_count(&mut count) } != 0 || count == 0 || count > 32 {
+                    return Err(());
+                }
+                let mut devices = Vec::with_capacity(count as usize);
+                for index in 0..count {
+                    let mut device = ptr::null_mut();
+                    if unsafe { get_handle(index, &mut device) } == 0 && !device.is_null() {
+                        devices.push(device);
+                    }
+                }
+                (!devices.is_empty()).then_some(devices).ok_or(())
+            })();
+            let devices = match devices {
+                Ok(devices) => devices,
+                Err(()) => {
+                    let _ = unsafe { shutdown() };
+                    return Err(());
+                }
+            };
+
+            Ok(Self {
+                devices,
+                get_temperature,
+                shutdown,
+                _module: module,
+            })
+        }
+
+        fn sample(&mut self) -> Result<TemperatureReading, ()> {
+            const NVML_TEMPERATURE_GPU: u32 = 0;
+            let celsius = self
+                .devices
+                .iter()
+                .filter_map(|device| {
+                    let mut temperature = 0_u32;
+                    (unsafe {
+                        (self.get_temperature)(*device, NVML_TEMPERATURE_GPU, &mut temperature)
+                    } == 0)
+                        .then(|| valid_gpu_temperature_celsius(f64::from(temperature)))
+                        .flatten()
+                })
+                .max_by(f32::total_cmp)
+                .ok_or(())?;
+            Ok(TemperatureReading {
+                celsius,
+                sensor: TemperatureSensor::GpuCore,
+                source: TemperatureSource::NvidiaNvml,
+            })
+        }
+    }
+
+    impl Drop for NvidiaNvmlTemperature {
+        fn drop(&mut self) {
+            let _ = unsafe { (self.shutdown)() };
         }
     }
 
@@ -664,6 +1476,62 @@ mod platform {
         }
     }
 
+    fn enumerate_gpu_temperature_target() -> Result<Option<(usize, u32, GpuTemperatureTarget)>, ()>
+    {
+        let factory =
+            unsafe { DXCoreCreateAdapterFactory::<IDXCoreAdapterFactory>() }.map_err(|_| ())?;
+        let adapters = unsafe {
+            factory
+                .CreateAdapterList::<IDXCoreAdapterList>(&[DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS])
+        }
+        .map_err(|_| ())?;
+        let mut candidates = Vec::new();
+
+        for adapter_index in 0..unsafe { adapters.GetAdapterCount() } {
+            let adapter =
+                unsafe { adapters.GetAdapter::<IDXCoreAdapter>(adapter_index) }.map_err(|_| ())?;
+            let is_hardware = read_dxcore_property::<bool>(&adapter, IsHardware)?;
+            let is_integrated = read_dxcore_property::<bool>(&adapter, IsIntegrated)?;
+            let dedicated_bytes =
+                read_dxcore_property::<u64>(&adapter, DedicatedAdapterMemory).unwrap_or(0);
+            let vendor_id =
+                read_dxcore_property::<DXCoreHardwareIDParts>(&adapter, HardwareIDParts)
+                    .map(|hardware| hardware.vendorID)
+                    .or_else(|_| {
+                        read_dxcore_property::<DXCoreHardwareID>(&adapter, HardwareID)
+                            .map(|hardware| hardware.vendorID)
+                    })?;
+            candidates.push(GpuAdapterIdentityCandidate {
+                index: adapter_index as usize,
+                is_software: !is_hardware,
+                is_integrated,
+                vendor_id,
+                dedicated_bytes,
+            });
+        }
+
+        Ok(select_gpu_temperature_target(&candidates))
+    }
+
+    fn read_dxcore_property<T: Copy + Default>(
+        adapter: &IDXCoreAdapter,
+        property: DXCoreAdapterProperty,
+    ) -> Result<T, ()> {
+        if !unsafe { adapter.IsPropertySupported(property) } {
+            return Err(());
+        }
+        let mut value = T::default();
+        unsafe {
+            adapter.GetProperty(
+                property,
+                size_of::<T>(),
+                (&mut value as *mut T).cast::<c_void>(),
+            )
+        }
+        .map_err(|_| ())?;
+        Ok(value)
+    }
+
     fn enumerate_dxgi_adapters() -> Result<Vec<DxgiVideoAdapter>, ()> {
         let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.map_err(|_| ())?;
         let mut adapters = Vec::new();
@@ -808,7 +1676,12 @@ mod platform {
 
 #[cfg(not(target_os = "windows"))]
 mod platform {
-    use super::{CpuTimes, MemoryUsage, NetworkCounters, VideoMemoryUsage};
+    use super::{
+        CpuTimes, GpuTemperatureTarget, MemoryUsage, MetricSourceError, NetworkCounters,
+        SensorServiceStatus, TemperatureSample, VideoMemoryUsage,
+    };
+
+    pub unsafe fn prepare_gpu_temperature_sources() {}
 
     pub struct GpuSampler;
 
@@ -819,8 +1692,16 @@ mod platform {
             Self
         }
 
-        pub fn read_celsius(&mut self) -> Result<f32, ()> {
-            Err(())
+        pub fn sample(&mut self) -> TemperatureSample {
+            TemperatureSample {
+                cpu: Err(MetricSourceError::Unsupported),
+                gpu: Err(MetricSourceError::Unsupported),
+                service_status: SensorServiceStatus::NotInstalled,
+            }
+        }
+
+        pub fn target(&self) -> Option<GpuTemperatureTarget> {
+            None
         }
     }
 
@@ -829,12 +1710,12 @@ mod platform {
             Self
         }
 
-        pub fn read_usage_percent(&mut self) -> Result<Option<f32>, ()> {
-            Err(())
+        pub fn read_usage_percent(&mut self) -> Result<Option<f32>, MetricSourceError> {
+            Err(MetricSourceError::Unsupported)
         }
 
-        pub fn read_video_memory(&mut self) -> Result<VideoMemoryUsage, ()> {
-            Err(())
+        pub fn read_video_memory(&mut self) -> Result<VideoMemoryUsage, MetricSourceError> {
+            Err(MetricSourceError::Unsupported)
         }
     }
 
@@ -853,13 +1734,216 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::{
-        CpuTimes, GpuEngineSample, MemoryUsage, NetworkCounters, VideoAdapterCandidate,
+        CpuTimes, GpuAdapterIdentityCandidate, GpuEngineSample, GpuTemperatureTarget,
+        MAX_COUNTER_SAMPLE_GAP, MemoryUsage, MetricHistory, MetricSnapshot, MetricSourceError,
+        MetricValue, NativeGpuTemperatureProvider, NetworkCounters, NetworkThroughput,
+        SensorServiceStatus, SnapshotFreshness, SourceStatus, VideoAdapterCandidate,
         VideoMemoryUsage, adapter_luid_key, aggregate_gpu_percent, calculate_cpu_percent,
-        calculate_network_throughput, select_hottest_temperature_celsius, select_video_adapter,
+        calculate_network_throughput, include_network_interface,
+        intel_level_zero_device_matches_target, level_zero_sensor_priority,
+        native_gpu_temperature_provider, sample_gap_is_usable, select_gpu_temperature_target,
+        select_video_adapter, valid_gpu_temperature_celsius,
     };
+
+    fn snapshot_at(sampled_at: Instant) -> MetricSnapshot {
+        MetricSnapshot {
+            sampled_at,
+            cpu_total_percent: MetricValue {
+                value: Some(25.0),
+                status: SourceStatus::Available,
+            },
+            cpu_temperature_celsius: MetricValue {
+                value: Some(42.0),
+                status: SourceStatus::Available,
+            },
+            cpu_temperature_info: None,
+            memory: MetricValue {
+                value: Some(MemoryUsage {
+                    used_bytes: 4,
+                    total_bytes: 8,
+                }),
+                status: SourceStatus::Available,
+            },
+            network: MetricValue {
+                value: Some(NetworkThroughput {
+                    received_bytes_per_second: 1.0,
+                    transmitted_bytes_per_second: 2.0,
+                }),
+                status: SourceStatus::Available,
+            },
+            gpu_total_percent: MetricValue {
+                value: None,
+                status: SourceStatus::Unavailable,
+            },
+            video_memory: MetricValue {
+                value: None,
+                status: SourceStatus::Unavailable,
+            },
+            temperature_celsius: MetricValue {
+                value: None,
+                status: SourceStatus::TemporarilyUnavailable,
+            },
+            temperature_info: None,
+            temperature_target: None,
+            sensor_service_status: SensorServiceStatus::TemporarilyUnavailable,
+        }
+    }
+
+    #[test]
+    fn snapshot_becomes_stale_only_after_the_maximum_age() {
+        let sampled_at = Instant::now();
+        let snapshot = snapshot_at(sampled_at);
+        let maximum_age = Duration::from_secs(5);
+
+        assert_eq!(
+            snapshot.freshness_at(sampled_at + maximum_age, maximum_age),
+            SnapshotFreshness::Fresh
+        );
+        assert_eq!(
+            snapshot.freshness_at(
+                sampled_at + maximum_age + Duration::from_nanos(1),
+                maximum_age
+            ),
+            SnapshotFreshness::Stale
+        );
+    }
+
+    #[test]
+    fn future_timestamp_is_treated_as_fresh_after_clock_discontinuity() {
+        let now = Instant::now();
+        let snapshot = snapshot_at(now + Duration::from_secs(1));
+
+        assert_eq!(
+            snapshot.freshness_at(now, Duration::from_secs(5)),
+            SnapshotFreshness::Fresh
+        );
+    }
+
+    #[test]
+    fn metric_history_keeps_only_the_configured_time_window() {
+        let start = Instant::now();
+        let mut history = MetricHistory::new(Duration::from_secs(5));
+
+        assert!(history.push(snapshot_at(start)));
+        assert!(history.push(snapshot_at(start + Duration::from_secs(5))));
+        assert_eq!(history.len(), 2, "the exact retention boundary is kept");
+
+        assert!(history.push(snapshot_at(
+            start + Duration::from_secs(5) + Duration::from_nanos(1)
+        )));
+        assert_eq!(history.len(), 2);
+        assert_eq!(
+            history
+                .oldest()
+                .expect("history should retain the boundary sample")
+                .sampled_at,
+            start + Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn metric_history_starts_empty() {
+        let history = MetricHistory::default();
+
+        assert!(history.is_empty());
+        assert_eq!(history.len(), 0);
+        assert_eq!(history.oldest(), None);
+        assert_eq!(history.latest(), None);
+        assert_eq!(history.iter().count(), 0);
+    }
+
+    #[test]
+    fn metric_history_never_exceeds_the_sample_limit() {
+        let sampled_at = Instant::now();
+        let mut history = MetricHistory::with_limits(Duration::from_secs(300), 3);
+
+        for _ in 0..4 {
+            assert!(history.push(snapshot_at(sampled_at)));
+        }
+
+        assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn metric_history_rejects_out_of_order_samples() {
+        let start = Instant::now();
+        let mut history = MetricHistory::new(Duration::from_secs(300));
+
+        assert!(history.push(snapshot_at(start + Duration::from_secs(2))));
+        assert!(!history.push(snapshot_at(start + Duration::from_secs(1))));
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history
+                .latest()
+                .expect("latest sample should remain")
+                .sampled_at,
+            start + Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn trend_points_are_empty_without_history_or_a_point_budget() {
+        let start = Instant::now();
+        let mut history = MetricHistory::default();
+
+        assert!(
+            history
+                .trend_points(8, |snapshot| snapshot.cpu_total_percent.value)
+                .is_empty()
+        );
+        assert!(history.push(snapshot_at(start)));
+        assert!(
+            history
+                .trend_points(0, |snapshot| snapshot.cpu_total_percent.value)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn trend_points_preserve_endpoints_and_missing_samples() {
+        let start = Instant::now();
+        let mut history = MetricHistory::default();
+        for second in 0..5 {
+            let mut snapshot = snapshot_at(start + Duration::from_secs(second));
+            snapshot.cpu_total_percent.value = (second != 2).then_some(second as f32 * 10.0);
+            snapshot.cpu_total_percent.status = if second == 2 {
+                SourceStatus::TemporarilyUnavailable
+            } else {
+                SourceStatus::Available
+            };
+            assert!(history.push(snapshot));
+        }
+
+        let points = history.trend_points(3, |snapshot| {
+            (snapshot.cpu_total_percent.status == SourceStatus::Available)
+                .then_some(snapshot.cpu_total_percent.value)
+                .flatten()
+        });
+
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0].sampled_at, start);
+        assert_eq!(points[0].value, Some(0.0));
+        assert_eq!(points[1].sampled_at, start + Duration::from_secs(2));
+        assert_eq!(points[1].value, None);
+        assert_eq!(points[2].sampled_at, start + Duration::from_secs(4));
+        assert_eq!(points[2].value, Some(40.0));
+    }
+
+    #[test]
+    fn one_trend_point_uses_the_latest_sample() {
+        let start = Instant::now();
+        let mut history = MetricHistory::default();
+        assert!(history.push(snapshot_at(start)));
+        assert!(history.push(snapshot_at(start + Duration::from_secs(2))));
+
+        let points = history.trend_points(1, |snapshot| snapshot.cpu_total_percent.value);
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].sampled_at, start + Duration::from_secs(2));
+    }
 
     #[test]
     fn cpu_percent_uses_kernel_and_user_deltas_minus_idle() {
@@ -896,13 +1980,16 @@ mod tests {
             NetworkCounters {
                 received_bytes: 1_000,
                 transmitted_bytes: 500,
+                interface_signature: 7,
             },
             NetworkCounters {
                 received_bytes: 2_024,
                 transmitted_bytes: 1_524,
+                interface_signature: 7,
             },
             Duration::from_millis(500),
-        );
+        )
+        .expect("stable counters should produce throughput");
 
         assert_eq!(result.received_bytes_per_second, 2_048.0);
         assert_eq!(result.transmitted_bytes_per_second, 2_048.0);
@@ -914,16 +2001,64 @@ mod tests {
             NetworkCounters {
                 received_bytes: 10_000,
                 transmitted_bytes: 20_000,
+                interface_signature: 7,
             },
             NetworkCounters {
                 received_bytes: 100,
                 transmitted_bytes: 200,
+                interface_signature: 7,
             },
             Duration::from_secs(1),
         );
 
-        assert_eq!(result.received_bytes_per_second, 0.0);
-        assert_eq!(result.transmitted_bytes_per_second, 0.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn network_topology_change_restarts_the_rate_baseline() {
+        let result = calculate_network_throughput(
+            NetworkCounters {
+                received_bytes: 1_000,
+                transmitted_bytes: 500,
+                interface_signature: 7,
+            },
+            NetworkCounters {
+                received_bytes: 50_000,
+                transmitted_bytes: 25_000,
+                interface_signature: 9,
+            },
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn network_defaults_to_active_physical_non_loopback_interfaces() {
+        assert!(include_network_interface(true, false, true));
+        assert!(!include_network_interface(false, false, true));
+        assert!(!include_network_interface(true, true, true));
+        assert!(!include_network_interface(true, false, false));
+    }
+
+    #[test]
+    fn long_counter_gap_requires_a_fresh_baseline() {
+        assert!(sample_gap_is_usable(MAX_COUNTER_SAMPLE_GAP));
+        assert!(!sample_gap_is_usable(
+            MAX_COUNTER_SAMPLE_GAP + Duration::from_nanos(1)
+        ));
+    }
+
+    #[test]
+    fn source_errors_distinguish_unsupported_from_temporary_failure() {
+        let unsupported = MetricValue::<f32>::from_source_error(MetricSourceError::Unsupported);
+        let temporary =
+            MetricValue::<f32>::from_source_error(MetricSourceError::TemporarilyUnavailable);
+
+        assert_eq!(unsupported.status, SourceStatus::Unavailable);
+        assert_eq!(temporary.status, SourceStatus::TemporarilyUnavailable);
+        assert_eq!(unsupported.value, None);
+        assert_eq!(temporary.value, None);
     }
 
     #[test]
@@ -1050,6 +2185,130 @@ mod tests {
     }
 
     #[test]
+    fn gpu_temperature_target_prefers_a_dedicated_adapter_over_integrated_activity() {
+        let candidates = [
+            GpuAdapterIdentityCandidate {
+                index: 0,
+                is_software: false,
+                is_integrated: true,
+                vendor_id: 0x8086,
+                dedicated_bytes: 128,
+            },
+            GpuAdapterIdentityCandidate {
+                index: 1,
+                is_software: false,
+                is_integrated: false,
+                vendor_id: 0x10de,
+                dedicated_bytes: 8_000,
+            },
+        ];
+
+        assert_eq!(
+            select_gpu_temperature_target(&candidates),
+            Some((1, 0x10de, GpuTemperatureTarget::Dedicated))
+        );
+    }
+
+    #[test]
+    fn gpu_temperature_target_uses_integrated_only_without_a_dedicated_adapter() {
+        let candidates = [GpuAdapterIdentityCandidate {
+            index: 2,
+            is_software: false,
+            is_integrated: true,
+            vendor_id: 0x8086,
+            dedicated_bytes: 128,
+        }];
+
+        assert_eq!(
+            select_gpu_temperature_target(&candidates),
+            Some((2, 0x8086, GpuTemperatureTarget::Integrated))
+        );
+    }
+
+    #[test]
+    fn gpu_temperature_target_ignores_virtual_and_unknown_adapters() {
+        let candidates = [
+            GpuAdapterIdentityCandidate {
+                index: 0,
+                is_software: true,
+                is_integrated: false,
+                vendor_id: 0x10de,
+                dedicated_bytes: 8_000,
+            },
+            GpuAdapterIdentityCandidate {
+                index: 1,
+                is_software: false,
+                is_integrated: false,
+                vendor_id: 0x1234,
+                dedicated_bytes: 16_000,
+            },
+        ];
+
+        assert_eq!(select_gpu_temperature_target(&candidates), None);
+    }
+
+    #[test]
+    fn intel_level_zero_device_must_match_the_selected_gpu_class() {
+        assert!(intel_level_zero_device_matches_target(
+            0x8086,
+            1,
+            GpuTemperatureTarget::Integrated
+        ));
+        assert!(intel_level_zero_device_matches_target(
+            0x8086,
+            0,
+            GpuTemperatureTarget::Dedicated
+        ));
+        assert!(!intel_level_zero_device_matches_target(
+            0x8086,
+            1,
+            GpuTemperatureTarget::Dedicated
+        ));
+        assert!(!intel_level_zero_device_matches_target(
+            0x10de,
+            0,
+            GpuTemperatureTarget::Dedicated
+        ));
+    }
+
+    #[test]
+    fn level_zero_accepts_only_gpu_core_or_board_edge_temperature() {
+        assert_eq!(level_zero_sensor_priority(1), Some(0));
+        assert_eq!(level_zero_sensor_priority(6), Some(1));
+        assert_eq!(level_zero_sensor_priority(0), None);
+        assert_eq!(level_zero_sensor_priority(2), None);
+        assert_eq!(level_zero_sensor_priority(8), None);
+    }
+
+    #[test]
+    fn native_gpu_provider_is_limited_to_matching_intel_and_nvidia_targets() {
+        assert_eq!(
+            native_gpu_temperature_provider(0x8086, GpuTemperatureTarget::Integrated),
+            Some(NativeGpuTemperatureProvider::IntelLevelZero)
+        );
+        assert_eq!(
+            native_gpu_temperature_provider(0x10de, GpuTemperatureTarget::Dedicated),
+            Some(NativeGpuTemperatureProvider::NvidiaNvml)
+        );
+        assert_eq!(
+            native_gpu_temperature_provider(0x10de, GpuTemperatureTarget::Integrated),
+            None
+        );
+        assert_eq!(
+            native_gpu_temperature_provider(0x1002, GpuTemperatureTarget::Dedicated),
+            None
+        );
+    }
+
+    #[test]
+    fn gpu_temperature_rejects_invalid_or_implausible_values() {
+        assert_eq!(valid_gpu_temperature_celsius(42.5), Some(42.5));
+        assert_eq!(valid_gpu_temperature_celsius(-1.0), None);
+        assert_eq!(valid_gpu_temperature_celsius(151.0), None);
+        assert_eq!(valid_gpu_temperature_celsius(f64::NAN), None);
+    }
+
+    #[test]
     fn video_memory_percent_is_derived_from_used_and_total_bytes() {
         let memory = VideoMemoryUsage {
             used_bytes: 3,
@@ -1066,26 +2325,5 @@ mod tests {
             Some("luid_0x00000000_0x0000f98e".into())
         );
         assert_eq!(adapter_luid_key("not-a-gpu-adapter"), None);
-    }
-
-    #[test]
-    fn high_precision_acpi_temperature_converts_from_tenths_kelvin() {
-        let temperature =
-            select_hottest_temperature_celsius(&[3010.0], 10.0).expect("valid ACPI temperature");
-
-        assert!((temperature - 27.85).abs() < 0.01);
-    }
-
-    #[test]
-    fn temperature_uses_the_hottest_valid_zone_and_rejects_invalid_samples() {
-        let temperature =
-            select_hottest_temperature_celsius(&[f64::NAN, 100.0, 3010.0, 3155.0, 6000.0], 10.0)
-                .expect("at least one valid thermal zone");
-
-        assert!((temperature - 42.35).abs() < 0.01);
-        assert_eq!(
-            select_hottest_temperature_celsius(&[100.0, 6000.0], 10.0),
-            None
-        );
     }
 }

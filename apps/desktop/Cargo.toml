@@ -7,6 +7,9 @@ rust-version.workspace = true
 build = "build.rs"
 
 [dependencies]
+agent-cli.workspace = true
+agent-core.workspace = true
+agent-http.workspace = true
 app-core.workspace = true
 slint.workspace = true
 system-monitor.workspace = true

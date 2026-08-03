@@ -1,0 +1,99 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="ZZH桌面助手"
+           Manufacturer="ZZH"
+           Version="0.1.2"
+           Language="2052"
+           Codepage="936"
+           UpgradeCode="D4CF096D-44DC-4CD0-8766-BC7D19C5E851"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="已安装更新版本的 ZZH桌面助手。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="ZzhAssistantIcon" SourceFile="$(var.AppIcon)" />
+    <Property Id="ARPPRODUCTICON" Value="ZzhAssistantIcon" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ZZH Desktop Assistant">
+        <Component Id="DesktopApplication" Bitness="always64">
+          <File Id="DesktopAssistantExe"
+                Source="$(var.DesktopExe)"
+                Name="desktop-assistant.exe"
+                KeyPath="yes" />
+        </Component>
+
+        <Component Id="AccurateTemperatureService" Bitness="always64">
+          <File Id="SensorServiceExe"
+                Source="$(var.SensorServiceExe)"
+                Name="ZZHSensorService.exe"
+                KeyPath="yes" />
+          <ServiceInstall Id="InstallSensorService"
+                          Name="ZZHSensorService"
+                          DisplayName="ZZH桌面助手温度传感器服务"
+                          Description="按需提供 CPU Package/Tctl-Tdie 与 GPU Core/Edge 温度。"
+                          Type="ownProcess"
+                          Start="demand"
+                          ErrorControl="normal"
+                          Account="LocalSystem"
+                          Vital="yes">
+            <util:PermissionEx Domain="BUILTIN"
+                               User="Users"
+                               ServiceQueryStatus="yes"
+                               ServiceStart="yes" />
+          </ServiceInstall>
+          <ServiceControl Id="ControlSensorService"
+                          Name="ZZHSensorService"
+                          Stop="both"
+                          Remove="uninstall"
+                          Wait="yes" />
+        </Component>
+
+        <Component Id="ThirdPartyNotice" Bitness="always64">
+          <File Id="ThirdPartyNoticesFile"
+                Source="$(var.ThirdPartyNotices)"
+                Name="ThirdPartyNotices.txt"
+                KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="ZZH桌面助手" />
+    </StandardDirectory>
+
+    <Component Id="ApplicationShortcuts" Directory="ApplicationProgramsFolder">
+      <Shortcut Id="StartMenuShortcut"
+                Name="ZZH桌面助手"
+                Description="ZZH桌面助手"
+                Target="[#DesktopAssistantExe]"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="ZzhAssistantIcon" />
+      <Shortcut Id="DesktopShortcut"
+                Directory="DesktopFolder"
+                Name="ZZH桌面助手"
+                Description="ZZH桌面助手"
+                Target="[#DesktopAssistantExe]"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="ZzhAssistantIcon" />
+      <RemoveFolder Id="RemoveApplicationProgramsFolder"
+                    Directory="ApplicationProgramsFolder"
+                    On="uninstall" />
+      <RegistryValue Root="HKLM"
+                     Key="Software\ZZH\DesktopAssistant"
+                     Name="ShortcutsInstalled"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Complete" Title="ZZH桌面助手" Level="1">
+      <ComponentRef Id="DesktopApplication" />
+      <ComponentRef Id="AccurateTemperatureService" />
+      <ComponentRef Id="ThirdPartyNotice" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+  </Package>
+</Wix>
