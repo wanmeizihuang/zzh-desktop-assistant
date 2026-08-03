@@ -4,7 +4,7 @@
 
 > 当前项目处于早期开发阶段。公开版本仅支持 Windows x64，安装包尚未进行代码签名，Windows SmartScreen 可能显示安全提示。
 
-<img width="283" height="436" alt="image" src="https://github.com/user-attachments/assets/4c283a12-0b8b-4dab-b837-020896ae0951" />
+<img width="283" height="436" alt="image" src="https://github.com/user-attachments/assets/2f90f26c-2c79-401f-924b-7e927a6837a4" />
 
 
 ## 功能
