@@ -6,7 +6,8 @@
 
 > 当前项目处于早期开发阶段。公开版本仅支持 Windows x64，安装包尚未进行代码签名，Windows SmartScreen 可能显示安全提示。
 
-![ZZH 桌面助手监控面板](artifacts/gpu-monitor-panel.png)
+<img width="618" height="960" alt="image" src="https://github.com/user-attachments/assets/9383a444-bbe9-4737-9499-53b117c42082" />
+
 
 ## 功能
 
