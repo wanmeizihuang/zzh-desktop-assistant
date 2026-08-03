@@ -6,7 +6,7 @@
 
 > 当前项目处于早期开发阶段。公开版本仅支持 Windows x64，安装包尚未进行代码签名，Windows SmartScreen 可能显示安全提示。
 
-<img width="618" height="960" alt="image" src="https://github.com/user-attachments/assets/9383a444-bbe9-4737-9499-53b117c42082" />
+<img width="309" height="480" alt="image" src="https://github.com/user-attachments/assets/9383a444-bbe9-4737-9499-53b117c42082" />
 
 
 ## 功能
@@ -47,7 +47,7 @@
 配置文件位于：
 
 ```text
-%LOCALAPPDATA%\Xiaoxi Desktop Assistant\settings.json
+%LOCALAPPDATA%\ZZH Desktop Assistant\settings.json
 ```
 
 配置文件不含 API Key。对话历史当前只保存在进程内存中，退出应用后不会保留。
